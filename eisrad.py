@@ -687,9 +687,10 @@ def main(argv):
         # compare raters and make them ready for plotting
         values_dict = get_values(A,B, measures)
         values = []
-        for key in values_dict.keys():
+        measures = []
+        for key in sorted(list(values_dict.keys())):
             values.append(values_dict[key])
-        measures = list(values_dict.keys())
+            measures.append(key)
         values = list(np.round(values,2))
         data.append(values)
 
