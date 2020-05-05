@@ -38,6 +38,7 @@ import sys
 import os
 import numpy as np
 import csv
+import pdb
 
 from math import pi
 import matplotlib
@@ -47,6 +48,7 @@ plt.rcParams.update({'font.size': 16})
 import matplotlib.cm as cm
 
 import nibabel as nib
+import nibabel.freesurfer.mghformat as fsmgh
 
 import skimage.measure as skm
 
@@ -588,6 +590,7 @@ def main(argv):
         parser = OptionParser()
         parser.add_option('-f', '--file', dest='f', help='Input FILE', metavar='FILE')
         parser.add_option('-o', '--output', dest='o', help='Output image FILE.png', metavar='FILE', default='polar_results.png')
+        parser.add_option('-r', '--results', dest='r', help='Output csv file with all measures', metavar='FILE', default=None)
         parser.add_option('-m', '--min', dest='min', help='Minimum colorbar value', metavar='MIN', default=None)
         parser.add_option('-M', '--max', dest='max', help='Maximum colorbar value', metavar='MAX', default=None)
         parser.add_option('-L', '--label', dest='label', help='Label for colorbar', metavar='STRING', default='')
@@ -595,6 +598,7 @@ def main(argv):
         parser.add_option('-u', '--unit', dest='unit', help='Label for colorbar', metavar='STRING', default='')
         parser.add_option('-d', '--display', default=True, action='store_false', help='Display the output before saving as png')
         parser.add_option('-v', '--verbose', default=False, action="store_true", help='verbose output')
+        parser.add_option('-b', '--binarize', dest='binarize', default=False, action="store_true", help='binarize input images')
         (options, args) = parser.parse_args()
     except Exception as e:
         print(e)
@@ -671,11 +675,16 @@ def main(argv):
             continue
 
         # load image files for each subject
+
         ## rater 1
         A = nib.load(man_file).get_data()
+        if options.binarize:
+            A = (A>0).astype(int)
         ## rater 2
         nii = nib.load(aut_file)
         B = nii.get_data()
+        if options.binarize:
+            B = (B>0).astype(int)
 
         # keep track of volume for colorbar mapping
         vol_cc = float(np.sum(B)*np.prod(nii.get_header().get_zooms()))/1000
@@ -693,6 +702,12 @@ def main(argv):
             measures.append(key)
         values = list(np.round(values,2))
         data.append(values)
+
+    if options.r is not None:
+        with open(options.r, 'w') as fid:
+            writer = csv.writer(fid)
+            writer.writerow(measures)
+            writer.writerows(data)
 
     # update if minimum and maximum were not passed as an argument
     if info['minimum'] is None:
