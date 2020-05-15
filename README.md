@@ -19,32 +19,21 @@ output will be a png file
 
 Use './eisrad.py -h' or './eisrad.py --help' for descriptions of the optional parameters as below
 
-
+```
 Usage: eisrad.py [options]
-
 
 Options:
 
   -h, --help                  show this help message and exit
-
   -f FILE, --file=FILE        Input FILE
-
   -o FILE, --output=FILE      Output image FILE.png
-
   -r FILE, --results=FILE     Output csv file with all measures
-
   -m MIN, --min=MIN           Minimum colorbar value
-
   -M MAX, --max=MAX           Maximum colorbar value
-
   -L STRING, --label=STRING   Label for colorbar
-
   -l, --log                   Plot logarithmic colorbar values
-
   -u STRING, --unit=STRING    Label for colorbar
-
   -d, --display               Display the output before saving as png
-
   -v, --verbose               verbose output
-
   -b, --binarize              binarize input images
+```
