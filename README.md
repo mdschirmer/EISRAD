@@ -1,19 +1,23 @@
 # EISRAD
-
-eisrad.py ({e}valuation of {i}mage {s}egmentations using {rad}ar plots)) is a script for creating similarity metric radar charts for imaging data (NIfTI/nii[.gz] formatted)
+EISRAD ({e}valuation of {i}mage {s}egmentations using {rad}ar plots)) is a tool to compare segmentations between raters based on multiple similarity metric in form of a radar plot. 
 
 (EISRAD - Ice circle; natural phenomenon appearing on the Vigala River in Estonia)
 
 ![polar plot example](polar.png)
 
 ## Example usage
+```
 ./eisrad.py -f segmentations.csv -o radar.png
+```
 
 ## Description
-input csv column format should be {automated_segmentation_file_path},{manual_segmentation_file_path}
+Compares two segmentations of rater A (here called manual) and rater B (here called automated). The reported metrics are Dice coefficient (Dice), Jaccard index (Jaccard), true positive rate (TPR), volumetric similarity (VS), Mutual information (MI), Adjusted Rand Index (ARI), intraclass correlation coefficient (ICC), probabilistic distance (PBD), Cohens kappa (KAP), Detection Error Rate (DER) and Outline Error Rate (OER). The solid line is based on the median of each measure, while the ribbon represents the interquartile range.
 
-output will be a png file
-    send to '{your_output_file_name}.png'
+Requires a csv file as input with two columns of the format: {manual_segmentation_file_path},{automated_segmentation_file_path}. Files should be in NIfTI/nii[.gz] format. The input segmentations can additionally binarized (>0) as part of the code. 
+
+Output "-o" will be a png file radar plot '{your_output_file_name}.png' as demonstrated above. Additionally, using the "-r" flag, the metrics can be returned as a csv file. 
+
+There are further formatting options for the colorbar (see below), including log-transforming the volumes of rater A. 
 
 ## Call options
 
