@@ -1,25 +1,46 @@
 #!/usr/bin/env python
 """
 :Summary:
+EISRAD ({e}valuation of {i}mage {s}egmentations using {rad}ar plots)) is a tool to compare segmentations between raters based on multiple similarity metric in form of a radar plot. 
+
+:Example:
+./eisrad.py -f segmentations.csv -o radar.png
+
+Usage: eisrad.py [options]
+
+Options:
+
+  -h, --help                  show this help message and exit
+  -f FILE, --file=FILE        Input FILE
+  -o FILE, --output=FILE      Output image FILE.png
+  -r FILE, --results=FILE     Output csv file with all measures
+  -m MIN, --min=MIN           Minimum colorbar value
+  -M MAX, --max=MAX           Maximum colorbar value
+  -L STRING, --label=STRING   Label for colorbar
+  -l, --log                   Plot logarithmic colorbar values
+  -u STRING, --unit=STRING    Label for colorbar
+  -d, --display               Display the output before saving as png
+  -v, --verbose               verbose output
+  -b, --binarize              binarize input images
 
 :Description:
-In all of the code below, A is seen as ground truth/gold standard for comparison
+Compares two segmentations of rater A (here called manual) and rater B (here called automated). The reported metrics are Dice coefficient (Dice), Jaccard index (Jaccard), true positive rate (TPR), volumetric similarity (VS), Mutual information (MI), Adjusted Rand Index (ARI), intraclass correlation coefficient (ICC), probabilistic distance (PBD), Cohens kappa (KAP), Detection Error Rate (DER) and Outline Error Rate (OER). The solid line is based on the median of each measure, while the ribbon represents the interquartile range.
 
-Selected the ones that work in extreme cases (no segmentation, i.e. ground truth vs empty image)
-This is to avoid true negative issue in 'large' images, where the majority should have the label 0
+Requires a csv file as input with two columns of the format: {manual_segmentation_file_path},{automated_segmentation_file_path}. Files should be in NIfTI/nii[.gz] format. The input segmentations can additionally binarized (>0) as part of the code. 
 
-filelist: man outline, aut outline
+Output "-o" will be a png file radar plot '{your_output_file_name}.png' as demonstrated above. Additionally, using the "-r" flag, the metrics can be returned as a csv file. 
+
+There are further formatting options for the colorbar (see below), including log-transforming the volumes of rater A. 
 
 :Requires:
 
 :TODO:
-Update this meassage
 
 :AUTHOR: MDS/MJN
 :ORGANIZATION: MGH/HMS
 :CONTACT: software@markus-schirmer.com
-:SINCE: 2018-11-12
-:VERSION: 0.1
+:SINCE: 2020-11-12
+:VERSION: 0.2
 """
 #=============================================
 # Metadata
