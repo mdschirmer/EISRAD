@@ -5,6 +5,9 @@ EISRAD ({e}valuation of {i}mage {s}egmentations using {rad}ar plots)) is a tool 
 
 ![polar plot example](polar.png)
 
+## Citation
+Dubost, Florian, et al. "Multi-atlas image registration of clinical data with automated quality assessment using ventricle segmentation." Medical Image Analysis (2020): 101698.
+
 ## Example usage
 ```
 ./eisrad.py -f segmentations.csv -o radar.png
