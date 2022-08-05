@@ -80,22 +80,22 @@ from optparse import OptionParser
 #=============================================
 def get_truepos(A,B):
     """Return true positive"""
-    return np.float(np.sum(np.logical_and((B==1), (A==1)).astype(int)))
+    return float(np.sum(np.logical_and((B==1), (A==1)).astype(int)))
 
 
 def get_trueneg(A,B):
     """Return true negative"""
-    return np.float(np.sum(np.logical_and((B==0), (A==0)).astype(int)))
+    return float(np.sum(np.logical_and((B==0), (A==0)).astype(int)))
 
 
 def get_falsepos(A,B):
     """Return false positive"""
-    return np.float(np.sum(np.logical_and((B==1), (A==0)).astype(int)))
+    return float(np.sum(np.logical_and((B==1), (A==0)).astype(int)))
 
 
 def get_falseneg(A,B):
     """Return false negative"""
-    return np.float(np.sum(np.logical_and((A==1), (B==0)).astype(int)))
+    return float(np.sum(np.logical_and((A==1), (B==0)).astype(int)))
 
 
 def get_dice(A, B):
@@ -698,17 +698,17 @@ def main(argv):
         # load image files for each subject
 
         ## rater 1
-        A = nib.load(man_file).get_data()
+        A = nib.load(man_file).get_fdata()
         if options.binarize:
             A = (A>0).astype(int)
         ## rater 2
         nii = nib.load(aut_file)
-        B = nii.get_data()
+        B = nii.get_fdata()
         if options.binarize:
             B = (B>0).astype(int)
 
         # keep track of volume for colorbar mapping
-        vol_cc = float(np.sum(B)*np.prod(nii.get_header().get_zooms()))/1000
+        vol_cc = float(np.sum(B)*np.prod(nii.header.get_zooms()))/1000
         colourmap.append(vol_cc)
 
         if options.verbose:
