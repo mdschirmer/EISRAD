@@ -109,7 +109,7 @@ Options:
 Clone the repo and install dependencies:
 
 ```bash
-git clone https://github.com/YOURNAME/EISRAD.git
+git clone https://github.com/mdschirmer/EISRAD.git
 cd EISRAD
 pip install -r requirements.txt
 ```
