@@ -1,46 +1,144 @@
 # EISRAD
-EISRAD ({e}valuation of {i}mage {s}egmentations using {rad}ar plots)) is a tool to compare segmentations between raters based on multiple similarity metric in form of a radar plot. 
+**EISRAD** (Evaluation of Image Segmentations using RADar plots) is a tool to compare binary segmentations using a suite of similarity and agreement metrics, visualized as radar plots.
 
-(EISRAD - Ice circle; natural phenomenon appearing on the Vigala River in Estonia)
+_(“Eisrad” is also the German word for "ice circle" – a natural phenomenon appearing on the Vigala River in Estonia)_
 
 ![polar plot example](polar.png)
 
-## Citation
-Dubost, Florian, et al. "Multi-atlas image registration of clinical data with automated quality assessment using ventricle segmentation." Medical Image Analysis (2020): 101698.
+---
 
-## Example usage
+## 📌 Key Features
+
+- Compares paired segmentations across a broad set of metrics
+- Produces clean, interpretable **radar plots** summarizing results
+- Exports numerical metrics to CSV
+- Supports batch evaluation and cohort-wide summaries
+- Binarizes input segmentations if needed
+- Fully modular and Python 3 compatible
+
+---
+
+## 📖 Citation
+
+If you use this tool in your research, please cite:
+
+> Dubost, Florian, et al.  
+> _Multi-atlas image registration of clinical data with automated quality assessment using ventricle segmentation._  
+> Medical Image Analysis (2020): 101698.  
+> https://doi.org/10.1016/j.media.2020.101698
+
+---
+
+## 🚀 Quick Start
+
+Run a basic segmentation comparison and generate a radar plot:
+
+```bash
+python eisrad.py -f segmentations.csv -o radar.png -r metrics.csv -b
 ```
-./eisrad.py -f segmentations.csv -o radar.png
+
+---
+
+## 🧠 Input Format
+
+EISRAD expects a CSV file with two columns:
+
+```csv
+manual,auto
+/path/to/manual_seg.nii.gz,/path/to/auto_seg.nii.gz
 ```
 
-## Description
-Compares two segmentations of rater A (here called manual) and rater B (here called automated). The reported metrics are Dice coefficient (Dice), Jaccard index (Jaccard), true positive rate (TPR), volumetric similarity (VS), Mutual information (MI), Adjusted Rand Index (ARI), intraclass correlation coefficient (ICC), probabilistic distance (PBD), Cohens kappa (KAP), Detection Error Rate (DER) and Outline Error Rate (OER). The solid line is based on the median of each measure, while the ribbon represents the interquartile range.
+- Files must be in `.nii` or `.nii.gz` format.
+- Segmentations should be aligned in space and shape.
+- Use `-b` to binarize all inputs (`> 0` becomes `1`).
 
-Requires a csv file as input with two columns of the format: {manual_segmentation_file_path},{automated_segmentation_file_path}. Files should be in NIfTI/nii[.gz] format. The input segmentations can additionally binarized (>0) as part of the code. 
+---
 
-Output "-o" will be a png file radar plot '{your_output_file_name}.png' as demonstrated above. Additionally, using the "-r" flag, the metrics can be returned as a csv file. 
+## 📈 Metrics Included
 
-There are further formatting options for the colorbar (see below), including log-transforming the volumes of rater A. 
+The following similarity metrics are computed for each segmentation pair:
 
-## Call options
+| Metric | Meaning |
+|--------|---------|
+| Dice | Overlap between segmentations |
+| Jaccard | Intersection over union |
+| TPR | True Positive Rate (Sensitivity) |
+| VS | Volumetric Similarity |
+| MI | Mutual Information |
+| ARI | Adjusted Rand Index |
+| ICC | Intra-class Correlation |
+| PBD | Probabilistic Distance |
+| KAP | Cohen's Kappa |
+| 1-OER | 1 - Outline Error Rate |
+| 1-DER | 1 - Detection Error Rate |
 
-Use './eisrad.py -h' or './eisrad.py --help' for descriptions of the optional parameters as below
+The radar plot shows the **median** value per metric, with an **interquartile ribbon**.
+
+---
+
+## ⚙️ Command-Line Options
+
+Use `--help` for full usage:
+
+```bash
+python eisrad.py --help
+```
 
 ```
 Usage: eisrad.py [options]
 
 Options:
-
-  -h, --help                  show this help message and exit
-  -f FILE, --file=FILE        Input FILE
-  -o FILE, --output=FILE      Output image FILE.png
-  -r FILE, --results=FILE     Output csv file with all measures
+  -f FILE, --file=FILE        Input CSV file with 'manual,auto' columns
+  -o FILE, --output=FILE      Output radar plot image (.png)
+  -r FILE, --results=FILE     Output CSV file with numeric metrics
+  -b, --binarize              Binarize input segmentations
+  -d, --display               Display plot interactively
+  -v, --verbose               Print processing info for each file pair
   -m MIN, --min=MIN           Minimum colorbar value
   -M MAX, --max=MAX           Maximum colorbar value
   -L STRING, --label=STRING   Label for colorbar
-  -l, --log                   Plot logarithmic colorbar values
-  -u STRING, --unit=STRING    Label for colorbar
-  -d, --display               Display the output before saving as png
-  -v, --verbose               verbose output
-  -b, --binarize              binarize input images
+  -u STRING, --unit=STRING    Unit for colorbar scale
+  -l, --log                   Use log-scaled colorbar
+  -h, --help                  Show this help message and exit
 ```
+
+---
+
+## 📦 Installation
+
+Clone the repo and install dependencies:
+
+```bash
+git clone https://github.com/YOURNAME/EISRAD.git
+cd EISRAD
+pip install -r requirements.txt
+```
+
+---
+
+## 📁 Outputs
+
+- **Radar plot** (e.g. `radar.png`) showing metric summary
+- **CSV file** (e.g. `metrics.csv`) with per-pair numeric values
+- Optionally: colorbar labels scaled to volume or intensity
+
+---
+
+## 🧪 Batch & Cohort Evaluation
+
+EISRAD is modular and designed to support batch processing. You can write a wrapper script to loop through multiple subjects, compare segmentations, and compile cohort-level summaries.
+
+See `scripts/eval_cohort.py` for an example.
+
+---
+
+## 🧊 Credits
+
+Developed by Markus D. Schirmer and collaborators at  
+MGH / Harvard Medical School
+
+---
+
+## 📝 License
+
+MIT License
