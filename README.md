@@ -1,144 +1,131 @@
 # EISRAD
-**EISRAD** (Evaluation of Image Segmentations using RADar plots) is a tool to compare binary segmentations using a suite of similarity and agreement metrics, visualized as radar plots.
 
-_(“Eisrad” is also the German word for "ice circle" – a natural phenomenon appearing on the Vigala River in Estonia)_
+**EISRAD** (Evaluation of Image Segmentations using RADar plots) is a flexible Python toolkit for
+comparing binary segmentation masks against a reference standard. It computes a broad suite of
+overlap- and agreement-based metrics, exports numeric results to CSV, and creates publication-quality
+visualizations (radar plots, scatter plots) to help you diagnose strengths and failure modes
+across your cohort.
 
-![polar plot example](polar.png)
-
----
-
-## 📌 Key Features
-
-- Compares paired segmentations across a broad set of metrics
-- Produces clean, interpretable **radar plots** summarizing results
-- Exports numerical metrics to CSV
-- Supports batch evaluation and cohort-wide summaries
-- Binarizes input segmentations if needed
-- Fully modular and Python 3 compatible
+*(Fun fact: “Eisrad” is the German word for “ice circle” — a rare swirling disk of ice seen on
+Estonian rivers.)*
 
 ---
 
-## 📖 Citation
+## 🚀 Installation
 
-If you use this tool in your research, please cite:
-
-> Dubost, Florian, et al.  
-> _Multi-atlas image registration of clinical data with automated quality assessment using ventricle segmentation._  
-> Medical Image Analysis (2020): 101698.  
-> https://doi.org/10.1016/j.media.2020.101698
+1. Clone this repository:
+   ```bash
+   git clone https://github.com/markus-schirmer/eisrad.git
+   cd eisrad
+   ```
+2. Create and activate a Python 3 environment, e.g. using mamba/conda:
+   ```bash
+   mamba create -n eisrad python=3.11 pip
+   mamba activate eisrad
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *Key packages:* `numpy`, `pandas`, `nibabel`, `scikit-image`, `scikit-learn`, `matplotlib`.
 
 ---
 
-## 🚀 Quick Start
+## 📄 Usage
 
-Run a basic segmentation comparison and generate a radar plot:
+EISRAD’s command-line front-end is `eisrad` (or `python -m eisrad`). At minimum you need:
 
 ```bash
-python eisrad.py -f segmentations.csv -o radar.png -r metrics.csv -b
+eisrad -f pair_list.csv -o radar.png -r metrics.csv
 ```
+
+- **`-f, --file`**: CSV with two columns: `manual`,`auto` (full paths to NIfTI files).  
+- **`-o, --output`**: Path to save the radar plot (default: `polar_results.png`).  
+- **`-r, --results`**: Path to save numeric metrics as CSV.  
+
+Run `eisrad -h` for the full list of options.
+
+### Optional flags
+
+- **`-b, --binarize`**: Threshold images `>0 → 1` before computing metrics.  
+- **`-l, --log`**: Use logarithmic color scale on radar plot.  
+- **`--dice-threshold`** *FLOAT* (default: 0.2): “low-Dice” cutoff for detection reporting.  
+- **`--low-dice-csv`** *PATH*: Write CSV of all cases with Dice < threshold.  
+- **`--vol-diff-threshold`** *FLOAT*: Relative volume-difference cutoff (e.g. 0.5 = 50%).  
+- **`--high-vol-diff-csv`** *PATH*: Write CSV of all cases exceeding volume-diff cutoff.  
+- **`--scatter-volume`** *PATH*: Save a manual-vs-auto volume log–log scatter plot.  
+- **`--scatter-dice`** *PATH*: Save a Dice-vs-volume semi-log scatter plot.  
 
 ---
 
-## 🧠 Input Format
+## 🔍 Examples
 
-EISRAD expects a CSV file with two columns:
+1. **Basic radar & metrics**  
+   ```bash
+   eisrad -f segmentations.csv -o cohort_radar.png -r cohort_metrics.csv
+   ```
 
-```csv
-manual,auto
-/path/to/manual_seg.nii.gz,/path/to/auto_seg.nii.gz
-```
+2. **Include log colorbar + binarization**  
+   ```bash
+   eisrad -f segmentations.csv -o radar_log.png -r metrics_log.csv -b -l
+   ```
 
-- Files must be in `.nii` or `.nii.gz` format.
-- Segmentations should be aligned in space and shape.
-- Use `-b` to binarize all inputs (`> 0` becomes `1`).
+3. **Report low-Dice & high-volume-diff cases**  
+   ```bash
+   eisrad      -f segmentations.csv      -r cohort_metrics.csv      --dice-threshold 0.2      --low-dice-csv low_dice_cases.csv      --vol-diff-threshold 0.5      --high-vol-diff-csv high_vol_diff_cases.csv
+   ```
 
----
+4. **Generate scatter diagnostics**  
+   ```bash
+   eisrad      -f segmentations.csv      --scatter-volume vol_scatter.png      --scatter-dice dice_scatter.png
+   ```
 
-## 📈 Metrics Included
+5. **Full evaluation with all plots & reports**  
+   ```bash
+   eisrad      -f bkupcomparison.csv      -o comparison/radar.png      -r comparison/metrics.csv      -l      --dice-threshold 0.2      --low-dice-csv comparison/low_dice.csv      --vol-diff-threshold 0.5      --high-vol-diff-csv comparison/high_vol_diff.csv      --scatter-volume comparison/vol_scatter.png      --scatter-dice comparison/dice_scatter.png
+   ```
+   This command produces the following in your `comparison/` folder:
 
-The following similarity metrics are computed for each segmentation pair:
+   - **Radar plot (log scale)**  
+     ![Radar Plot](comparison/radar.png)
 
-| Metric | Meaning |
-|--------|---------|
-| Dice | Overlap between segmentations |
-| Jaccard | Intersection over union |
-| TPR | True Positive Rate (Sensitivity) |
-| VS | Volumetric Similarity |
-| MI | Mutual Information |
-| ARI | Adjusted Rand Index |
-| ICC | Intra-class Correlation |
-| PBD | Probabilistic Distance |
-| KAP | Cohen's Kappa |
-| 1-OER | 1 - Outline Error Rate |
-| 1-DER | 1 - Detection Error Rate |
+   - **Metrics CSV**: all numeric metrics + volumes + relative differences  
+     `comparison/metrics.csv`
 
-The radar plot shows the **median** value per metric, with an **interquartile ribbon**.
+   - **Low-Dice cases (Dice < 0.2)**  
+     `comparison/low_dice.csv`
 
----
+   - **High volume-difference cases (rel diff > 0.5)**  
+     `comparison/high_vol_diff.csv`
 
-## ⚙️ Command-Line Options
+   - **Volume scatter (manual vs auto)**  
+     ![Volume Scatter](comparison/vol_scatter.png)
 
-Use `--help` for full usage:
-
-```bash
-python eisrad.py --help
-```
-
-```
-Usage: eisrad.py [options]
-
-Options:
-  -f FILE, --file=FILE        Input CSV file with 'manual,auto' columns
-  -o FILE, --output=FILE      Output radar plot image (.png)
-  -r FILE, --results=FILE     Output CSV file with numeric metrics
-  -b, --binarize              Binarize input segmentations
-  -d, --display               Display plot interactively
-  -v, --verbose               Print processing info for each file pair
-  -m MIN, --min=MIN           Minimum colorbar value
-  -M MAX, --max=MAX           Maximum colorbar value
-  -L STRING, --label=STRING   Label for colorbar
-  -u STRING, --unit=STRING    Unit for colorbar scale
-  -l, --log                   Use log-scaled colorbar
-  -h, --help                  Show this help message and exit
-```
+   - **DICE vs. volume scatter**  
+     ![DICE Scatter](comparison/dice_scatter.png)
 
 ---
 
-## 📦 Installation
+## 📂 Module Structure
 
-Clone the repo and install dependencies:
-
-```bash
-git clone https://github.com/mdschirmer/EISRAD.git
-cd EISRAD
-pip install -r requirements.txt
 ```
-
----
-
-## 📁 Outputs
-
-- **Radar plot** (e.g. `radar.png`) showing metric summary
-- **CSV file** (e.g. `metrics.csv`) with per-pair numeric values
-- Optionally: colorbar labels scaled to volume or intensity
-
----
-
-## 🧪 Batch & Cohort Evaluation
-
-EISRAD is modular and designed to support batch processing. You can write a wrapper script to loop through multiple subjects, compare segmentations, and compile cohort-level summaries.
-
-See `scripts/eval_cohort.py` for an example.
+eisrad/
+├─ __main__.py        # CLI & orchestration
+├─ io.py              # load + reorient NIfTIs
+├─ metrics.py         # Dice, Jaccard, TPR, MI, ARI, ICC, etc.
+├─ reports.py         # low-Dice & high-vol-diff CSV/report
+└─ plots.py           # radar, volume-scatter, dice-scatter
+```
 
 ---
 
 ## 🧊 Credits
 
-Developed by Markus D. Schirmer and collaborators at  
-MGH / Harvard Medical School
+Developed by Markus D. Schirmer  
+Massachusetts General Hospital / Harvard Medical School
 
 ---
 
 ## 📝 License
 
-MIT License
+Released under the MIT License.
