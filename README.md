@@ -1,128 +1,144 @@
 # EISRAD
 
-**EISRAD** (Evaluation of Image Segmentations using RADar plots) is a flexible Python toolkit for
-comparing binary segmentation masks against a reference standard. It computes a broad suite of
-overlap- and agreement-based metrics, exports numeric results to CSV, and creates publication-quality
-visualizations (radar plots, scatter plots) to help you diagnose strengths and failure modes
-across your cohort.
+**EISRAD** (Evaluation of Image Segmentations using RADar plots) is a Python toolkit designed to
+quantitatively assess how well automated segmentation algorithms reproduce a manual (reference)
+segmentation. It computes a variety of metrics and generates plots to help visualize algorithm
+performance across a cohort.
 
-*(Fun fact: “Eisrad” is the German word for “ice circle” — a rare swirling disk of ice seen on
-Estonian rivers.)*
+---
 
+## 🔬 Scientific Overview
+
+Below is an example **radar plot** summarizing multiple similarity metrics (e.g., Dice, Jaccard,
+true positive rate) for each case in a cohort. Points are colored by the automated segmentation
+volume on a logarithmic scale. The solid blue line indicates the median performance across cases,
+and the shaded blue band represents the interquartile range (IQR), highlighting variability.
+
+![Radar Plot Example](radar.png)
+
+Next, a **volume agreement scatter plot** shows how manual and automated lesion volumes correlate.
+Each point represents one case; perfect agreement would lie on the diagonal line. The Pearson
+correlation coefficient quantifies overall agreement, while the inset confusion matrix reports the
+number of cases where both volumes are zero (no lesion) or nonzero.
+
+![Volume Scatter Example](vol_scatter.png)
+
+Finally, the **DICE vs. lesion volume scatter plot** illustrates how algorithm accuracy (Dice)
+depends on lesion size. The red dashed line marks the detection threshold (e.g., Dice = 0.2), and both
+Pearson and Spearman correlations are reported.
+
+![DICE vs Volume Scatter Example](dice_scatter.png)
 ---
 
 ## 🚀 Installation
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/markus-schirmer/eisrad.git
-   cd eisrad
-   ```
-2. Create and activate a Python 3 environment, e.g. using mamba/conda:
-   ```bash
-   mamba create -n eisrad python=3.11 pip
-   mamba activate eisrad
-   ```
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-   *Key packages:* `numpy`, `pandas`, `nibabel`, `scikit-image`, `scikit-learn`, `matplotlib`.
+You can either install EISRAD into your Python environment or run it directly without installation.
+
+### 1. Editable install
+
+```bash
+git clone https://github.com/markus-schirmer/eisrad.git
+cd eisrad
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install -e . --use-pep517
+```
+
+This makes the `eisrad` command available in your shell.
+
+### 2. Run without installing
+
+From the project root (where the `eisrad/` folder lives), you can run:
+
+```bash
+# Using module invocation
+PYTHONPATH=. python -m eisrad [OPTIONS]
+
+# Or directly with the entrypoint script
+python eisrad/__main__.py [OPTIONS]
+```
+
+No need for `pip install` if you prefer in-place execution.
 
 ---
 
 ## 📄 Usage
 
-EISRAD’s command-line front-end is `eisrad` (or `python -m eisrad`). At minimum you need:
+At minimum, provide an input CSV and output paths:
 
 ```bash
 eisrad -f pair_list.csv -o radar.png -r metrics.csv
 ```
 
-- **`-f, --file`**: CSV with two columns: `manual`,`auto` (full paths to NIfTI files).  
-- **`-o, --output`**: Path to save the radar plot (default: `polar_results.png`).  
-- **`-r, --results`**: Path to save numeric metrics as CSV.  
+- **`-f, --file`**: CSV file with `manual,auto` columns pointing to NIfTI mask paths.  
+- **`-o, --output`**: Output radar plot image (default `polar_results.png`).  
+- **`-r, --results`**: Output CSV for numeric metrics.
 
-Run `eisrad -h` for the full list of options.
+Run `eisrad -h` for the full list of flags.
 
-### Optional flags
+### Key options
 
-- **`-b, --binarize`**: Threshold images `>0 → 1` before computing metrics.  
-- **`-l, --log`**: Use logarithmic color scale on radar plot.  
-- **`--dice-threshold`** *FLOAT* (default: 0.2): “low-Dice” cutoff for detection reporting.  
-- **`--low-dice-csv`** *PATH*: Write CSV of all cases with Dice < threshold.  
-- **`--vol-diff-threshold`** *FLOAT*: Relative volume-difference cutoff (e.g. 0.5 = 50%).  
-- **`--high-vol-diff-csv`** *PATH*: Write CSV of all cases exceeding volume-diff cutoff.  
-- **`--scatter-volume`** *PATH*: Save a manual-vs-auto volume log–log scatter plot.  
-- **`--scatter-dice`** *PATH*: Save a Dice-vs-volume semi-log scatter plot.  
+- `-b, --binarize`: Threshold volumes `>0 → 1`.  
+- `-l, --log`: Enable log color scale on radar.  
+- `--dice-threshold FLOAT`: Low-Dice cutoff (default `0.2`).  
+- `--low-dice-csv PATH`: Save cases with Dice < threshold.  
+- `--vol-diff-threshold FLOAT`: Relative volume-diff cutoff.  
+- `--high-vol-diff-csv PATH`: Save cases exceeding vol-diff.  
+- `--scatter-volume PATH`: Save manual vs auto volume scatter.  
+- `--scatter-dice PATH`: Save Dice vs volume scatter.
 
 ---
 
 ## 🔍 Examples
 
-1. **Basic radar & metrics**  
-   ```bash
-   eisrad -f segmentations.csv -o cohort_radar.png -r cohort_metrics.csv
-   ```
+### Basic radar & metrics
 
-2. **Include log colorbar + binarization**  
-   ```bash
-   eisrad -f segmentations.csv -o radar_log.png -r metrics_log.csv -b -l
-   ```
+```bash
+eisrad -f segs.csv -o radar.png -r metrics.csv
+```
 
-3. **Report low-Dice & high-volume-diff cases**  
-   ```bash
-   eisrad      -f segmentations.csv      -r cohort_metrics.csv      --dice-threshold 0.2      --low-dice-csv low_dice_cases.csv      --vol-diff-threshold 0.5      --high-vol-diff-csv high_vol_diff_cases.csv
-   ```
+### Full evaluation with all outputs
 
-4. **Generate scatter diagnostics**  
-   ```bash
-   eisrad      -f segmentations.csv      --scatter-volume vol_scatter.png      --scatter-dice dice_scatter.png
-   ```
+```bash
+eisrad \
+  -f comparison.csv \
+  -o comparison/radar.png \
+  -r comparison/metrics.csv \
+  -l \
+  --dice-threshold 0.2 \
+  --low-dice-csv comparison/low_dice.csv \
+  --vol-diff-threshold 0.5 \
+  --high-vol-diff-csv comparison/high_vol_diff.csv \
+  --scatter-volume comparison/vol_scatter.png \
+  --scatter-dice comparison/dice_scatter.png
+```
 
-5. **Full evaluation with all plots & reports**  
-   ```bash
-   eisrad      -f bkupcomparison.csv      -o comparison/radar.png      -r comparison/metrics.csv      -l      --dice-threshold 0.2      --low-dice-csv comparison/low_dice.csv      --vol-diff-threshold 0.5      --high-vol-diff-csv comparison/high_vol_diff.csv      --scatter-volume comparison/vol_scatter.png      --scatter-dice comparison/dice_scatter.png
-   ```
-   This command produces the following in your `comparison/` folder:
+This generates:
 
-   - **Radar plot (log scale)**  
-     ![Radar Plot](comparison/radar.png)
-
-   - **Metrics CSV**: all numeric metrics + volumes + relative differences  
-     `comparison/metrics.csv`
-
-   - **Low-Dice cases (Dice < 0.2)**  
-     `comparison/low_dice.csv`
-
-   - **High volume-difference cases (rel diff > 0.5)**  
-     `comparison/high_vol_diff.csv`
-
-   - **Volume scatter (manual vs auto)**  
-     ![Volume Scatter](comparison/vol_scatter.png)
-
-   - **DICE vs. volume scatter**  
-     ![DICE Scatter](comparison/dice_scatter.png)
+- **Radar plot (log scale)**: `comparison/radar.png`  
+- **Metrics CSV**: `comparison/metrics.csv`  
+- **Low-Dice cases**: `comparison/low_dice.csv`  
+- **High vol-diff cases**: `comparison/high_vol_diff.csv`  
+- **Volume scatter**: `comparison/vol_scatter.png`  
+- **DICE scatter**: `comparison/dice_scatter.png`  
 
 ---
 
-## 📂 Module Structure
+## 📂 Project Structure
 
 ```
 eisrad/
-├─ __main__.py        # CLI & orchestration
-├─ io.py              # load + reorient NIfTIs
-├─ metrics.py         # Dice, Jaccard, TPR, MI, ARI, ICC, etc.
-├─ reports.py         # low-Dice & high-vol-diff CSV/report
-└─ plots.py           # radar, volume-scatter, dice-scatter
+├─ __main__.py
+├─ io.py
+├─ metrics.py
+├─ reports.py
+└─ plots.py
+README.md
+requirements.txt
+setup.py
+pyproject.toml
 ```
-
----
-
-## 🧊 Credits
-
-Developed by Markus D. Schirmer  
-Massachusetts General Hospital / Harvard Medical School
 
 ---
 
