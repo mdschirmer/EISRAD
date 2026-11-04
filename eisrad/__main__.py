@@ -117,6 +117,7 @@ def main(argv=None):
         if not os.path.isfile(mfile) or not os.path.isfile(afile):
             print(f"⚠️  Skipping missing: {mfile}, {afile}")
             continue
+        print(f"ℹ️  Loading file pair: {mfile}, {afile}")
 
         # Load & reorient both, optionally binarize
         A, zooms = load_and_reorient_pair(mfile, opts.binarize)
