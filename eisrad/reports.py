@@ -8,8 +8,6 @@ low‐Dice and high‐volume‐difference cases.
     Markus D. Schirmer
     MGH / Harvard Medical School
 
-:Version: 1.0
-:Date: 2025-06-24
 :License: MIT
 """
 

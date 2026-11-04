@@ -8,8 +8,6 @@ I/O utilities for EISRAD: loading a NIfTI, reorienting to a canonical
     Markus D. Schirmer
     MGH / Harvard Medical School
 
-:Version: 1.0
-:Date: 2025-06-24
 :License: MIT
 """
 

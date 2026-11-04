@@ -11,8 +11,6 @@ computes metrics, writes reports, and delegates all plotting to plots.py.
     Markus D. Schirmer
     MGH / Harvard Medical School
 
-:Version: 2.0.1
-:Date: 2025-06-24
 :License: MIT
 """
 
@@ -24,6 +22,7 @@ import nibabel as nib
 from optparse import OptionParser
 
 # Absolute imports to avoid shadowing std-lib io
+from eisrad         import __version__
 from eisrad.io      import load_and_reorient_pair
 from eisrad.metrics import get_values, get_lesion_coverage
 from eisrad.reports import write_low_dice, write_high_vol_diff
@@ -36,7 +35,7 @@ def main(argv=None):
     argv: list of command-line arguments (including script name). If None,
           OptionParser.parse_args will read from sys.argv.
     """
-    parser = OptionParser()
+    parser = OptionParser(version=f"eisrad {__version__}")
     # Core options
     parser.add_option('-f','--file',     dest='f',    help='Input CSV (manual,auto)')
     parser.add_option('-o','--output',   dest='o',

@@ -11,8 +11,6 @@ and information‐theoretic (NMI) and probabilistic (PBD) metrics.
     Markus D. Schirmer
     MGH / Harvard Medical School
 
-:Version: 1.3
-:Date: 2025-06-24
 :License: MIT
 """
 

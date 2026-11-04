@@ -8,8 +8,6 @@ manual-vs-auto scatter, Dice-vs-volume heatmap, and lesion detection curve.
     Markus D. Schirmer
     MGH / Harvard Medical School
 
-:Version: 1.1
-:Date: 2025-06-24
 :License: MIT
 """
 
