@@ -17,6 +17,7 @@ and information‐theoretic (NMI) and probabilistic (PBD) metrics.
 """
 
 import numpy as np
+from scipy import ndimage
 from scipy.spatial.distance import directed_hausdorff
 from scipy.spatial import cKDTree
 from sklearn.metrics import (
@@ -67,10 +68,10 @@ def get_jaccard(A, B):
     return TP/denom if denom else 1.0
 
 def get_tpr(A, B):
-    """True positive rate: TP / (TP + FN)."""
+    """True positive rate: TP / (TP + FN); 1.0 if A is empty (nothing to miss)."""
     TP = get_truepos(A, B)
     FN = get_falseneg(A, B)
-    return TP/(TP+FN) if (TP+FN) else 0.0
+    return TP/(TP+FN) if (TP+FN) else 1.0
 
 def get_vs(A, B):
     """Volumetric similarity: 1 − |FP − FN|/(2TP + FP + FN)."""
@@ -105,21 +106,26 @@ def get_ICC(A, B):
     return (MS_b - MS_w)/denom if denom else 1.0
 
 def get_KAP(A, B):
-    """Cohen’s kappa between two binary masks."""
+    """Cohen’s kappa between two binary masks (1.0 if both are empty)."""
     flatA = (A > 0).ravel().astype(int)
     flatB = (B > 0).ravel().astype(int)
+    if not flatA.any() and not flatB.any():
+        return 1.0
     return cohen_kappa_score(flatA, flatB)
 
 
 # ─── Probabilistic & distance metrics ───
 
 def get_PBD(A, B):
-    """Probabilistic distance: normalized voxel-wise disagreement."""
+    """
+    Probabilistic distance: normalized voxel-wise disagreement.
+    0 if both masks are empty, inf if they are non-empty but do not overlap.
+    """
     A_bin = (A > 0)
     B_bin = (B > 0)
     intersection = np.sum(A_bin & B_bin)
     if intersection == 0:
-        return 0.0
+        return 0.0 if not (A_bin.any() or B_bin.any()) else np.inf
     return float(np.sum(np.abs(A_bin.astype(int) - B_bin.astype(int))) 
                  / (2.0 * intersection))
 
@@ -146,6 +152,56 @@ def get_AVD(A, B):
     return float((dA.mean() + dB.mean()) / 2.0)
 
 
+# ─── Lesion-wise detection ───
+
+def _label26(M):
+    """Connected components with 26-connectivity (full in any ndim)."""
+    return ndimage.label(M, structure=np.ones((3,) * M.ndim, dtype=bool))
+
+def get_ODER(A, B):
+    """
+    Outline Error Rate (OER) and Detection Error Rate (DER), lesion-wise
+    (Wack et al., 2012). Lesions are connected components (26-connectivity);
+    a lesion is detected if it overlaps any lesion in the other mask.
+      OER = (voxels of detected lesions in A and B − 2|A∩B|) / MTA
+      DER = (voxels of lesions found in only one mask) / MTA
+    with MTA = (|A| + |B|) / 2. Both are 0 when A and B are empty. Either
+    can exceed 1, so 1-OER / 1-DER can be negative.
+    """
+    A_bin = (A > 0)
+    B_bin = (B > 0)
+    MTA = (A_bin.sum() + B_bin.sum()) / 2.0
+    if MTA == 0:
+        return 0.0, 0.0
+    inter = A_bin & B_bin
+
+    OE, DE = -2.0 * inter.sum(), 0.0
+    for M in (A_bin, B_bin):
+        labels, n = _label26(M)
+        size    = np.bincount(labels.ravel(), minlength=n+1)[1:]
+        matched = np.zeros(n, dtype=bool)
+        hit     = np.unique(labels[inter])
+        matched[hit[hit > 0] - 1] = True
+        OE += size[matched].sum()
+        DE += size[~matched].sum()
+    return float(OE / MTA), float(DE / MTA)
+
+def get_lesion_coverage(A, B):
+    """
+    Per-lesion coverage: for each connected component (26-connectivity) of the
+    reference mask A, the fraction of its voxels that are also set in B.
+    Returns a 1-D array with one value in [0, 1] per lesion (empty if A is empty).
+    """
+    A_bin = (A > 0)
+    B_bin = (B > 0)
+    labels, n = _label26(A_bin)
+    if n == 0:
+        return np.zeros(0)
+    size    = np.bincount(labels.ravel(), minlength=n+1)[1:]
+    covered = np.bincount(labels[B_bin], minlength=n+1)[1:]
+    return covered / size
+
+
 # ─── Dispatcher ───
 
 def get_values(A, B, measures):
@@ -164,13 +220,7 @@ def get_values(A, B, measures):
         elif m == '1/(1+PBD)':   vals[m] = 1.0/(1.0 + get_PBD(A, B))
         elif m == 'KAP':         vals[m] = get_KAP(A, B)
         elif m == '1-OER' or m=='1-DER':
-            # Outline & Detection Error Rates
-            # OER = FP/(TP+FP), DER = FN/(TP+FN)
-            TP = get_truepos(A,B)
-            FP = get_falsepos(A,B)
-            FN = get_falseneg(A,B)
-            OER = FP/(TP+FP) if (TP+FP) else 0.0
-            DER = FN/(TP+FN) if (TP+FN) else 0.0
+            OER, DER = get_ODER(A, B)
             if m == '1-OER': vals[m] = 1.0 - OER
             else:            vals[m] = 1.0 - DER
         else:

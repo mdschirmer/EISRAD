@@ -25,9 +25,10 @@ from optparse import OptionParser
 
 # Absolute imports to avoid shadowing std-lib io
 from eisrad.io      import load_and_reorient_pair
-from eisrad.metrics import get_values
+from eisrad.metrics import get_values, get_lesion_coverage
 from eisrad.reports import write_low_dice, write_high_vol_diff
-from eisrad.plots   import plot_radar, plot_volume_scatter, plot_dice_vs_volume
+from eisrad.plots   import (plot_radar, plot_metric_bars, plot_volume_scatter,
+                            plot_dice_vs_volume, plot_detection_curve)
 
 
 def main(argv=None):
@@ -69,10 +70,14 @@ def main(argv=None):
                       help='Threshold for relative volume-difference reporting')
     parser.add_option('--high-vol-diff-csv',   dest='high_vol_diff_csv',
                       help='Write high-vol-diff cases to CSV')
-    parser.add_option('--scatter-volume',      dest='sv',
-                      help='Output manual vs auto volume scatter plot (PNG)')
-    parser.add_option('--scatter-dice',        dest='sd',
-                      help='Output Dice vs volume scatter plot (PNG)')
+    parser.add_option('--volume-heatmap', '--scatter-volume', dest='sv',
+                      help='Output manual vs auto volume heatmap (PNG)')
+    parser.add_option('--dice-heatmap', '--scatter-dice', dest='sd',
+                      help='Output Dice vs volume heatmap (PNG)')
+    parser.add_option('--bar-plot',            dest='bar',
+                      help='Output metric bar plot, alternative to radar (PNG)')
+    parser.add_option('--detection-curve',     dest='dc',
+                      help='Output lesion detection vs coverage curve (PNG)')
 
     # Parse arguments
     if argv is not None:
@@ -110,7 +115,9 @@ def main(argv=None):
     data        = []
     manual_cc   = []
     auto_cc     = []
+    coverages   = []
     valid_pairs = []
+    binarized   = []
 
     # Process each pair
     for idx,(mfile,afile) in enumerate(file_list):
@@ -127,6 +134,14 @@ def main(argv=None):
             print(f"⚠️  Shape mismatch: {mfile} vs {afile}")
             continue
 
+        # Metrics and volumes assume 0/1 masks: binarize others at 0.5
+        if not np.isin(A, (0, 1)).all():
+            A = (A > 0.5).astype(np.uint8)
+            binarized.append(mfile)
+        if not np.isin(B, (0, 1)).all():
+            B = (B > 0.5).astype(np.uint8)
+            binarized.append(afile)
+
         # Compute similarity metrics
         vals_dict = get_values(A, B, measures)
         row       = [round(vals_dict[m],3) for m in measures]
@@ -137,6 +152,10 @@ def main(argv=None):
         va = B.sum() * np.prod(zooms) / 1000.0
         manual_cc.append(vm)
         auto_cc.append(va)
+
+        # Per-lesion coverage (only needed for the detection curve)
+        if opts.dc:
+            coverages.append(get_lesion_coverage(A, B))
 
         valid_pairs.append((mfile, afile))
         if opts.verbose:
@@ -185,19 +204,40 @@ def main(argv=None):
     if info['minimum'] == info['maximum']:
         info['maximum'] += 1e-6
 
+    # ARI / ICC / KAP can dip below 0 (worse than chance); clamp for the
+    # plots so all spokes share the 0-1 scale. metrics.csv keeps raw values.
+    raw_vals  = np.asarray(data, dtype=float)
+    plot_vals = np.clip(raw_vals, 0, None)
+    n_neg     = (raw_vals < 0).sum(axis=0)
+
     plot_radar(
-        values    = np.asarray(data),
+        values    = plot_vals,
         colourmap = np.asarray(auto_cc),
         measures  = measures,
         info      = info,
         outfile   = opts.o
     )
 
-    # Optional scatter plots
+    # Optional plots
+    if opts.bar:
+        plot_metric_bars(plot_vals, np.asarray(auto_cc),
+                         measures, info, opts.bar)
     if opts.sv:
         plot_volume_scatter(df_out, opts.sv)
     if opts.sd:
         plot_dice_vs_volume(df_out, opts.sd, opts.dice_thresh)
+    if opts.dc:
+        plot_detection_curve(coverages, opts.dc)
+
+    if n_neg.any():
+        counts = ', '.join(f"{m}: {c}" for m, c in zip(measures, n_neg) if c)
+        print(f"⚠️  Negative metric values were clamped to 0 in the plots "
+              f"(metrics CSV keeps raw values) — {counts}")
+    if binarized:
+        print(f"⚠️  {len(binarized)} non-binary mask(s) were binarized at 0.5 "
+              f"(> 0.5 → 1); use -b to binarize at > 0 instead:")
+        for f in binarized:
+            print(f"     {f}")
 
 
 if __name__ == "__main__":
