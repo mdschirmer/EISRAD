@@ -37,19 +37,21 @@ You can either install EISRAD into your Python environment or run it directly wi
 ### 1. Editable install
 
 ```bash
-git clone https://github.com/markus-schirmer/eisrad.git
-cd eisrad
+git clone https://github.com/mdschirmer/EISRAD.git
+cd EISRAD
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-pip install -e . --use-pep517
+pip install -e .            # or: pip install -e ".[test]" to also run the tests
 ```
 
-This makes the `eisrad` command available in your shell.
+This installs the dependencies (listed in `pyproject.toml`) and makes the
+`eisrad` command available in your shell. Check the installed version with
+`eisrad --version`.
 
 ### 2. Run without installing
 
-From the project root (where the `eisrad/` folder lives), you can run:
+Install the dependencies listed in `pyproject.toml` (e.g. `pip install matplotlib nibabel numpy pandas scikit-learn scipy`),
+then, from the project root (where the `eisrad/` folder lives), run:
 
 ```bash
 # Using module invocation
@@ -141,8 +143,6 @@ eisrad/
 ├─ reports.py
 └─ plots.py
 README.md
-requirements.txt
-setup.py
 pyproject.toml
 ```
 
