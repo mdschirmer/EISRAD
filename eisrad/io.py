@@ -14,7 +14,7 @@ I/O utilities for EISRAD: loading a NIfTI, reorienting to a canonical
 import nibabel as nib
 import numpy as np
 
-def load_and_reorient_pair(path, binarize=False):
+def load_and_reorient_pair(path, binarize=None):
     """
     Load a NIfTI file, reorient it to RAS canonical space, extract the
     data array and voxel dimensions.
@@ -23,8 +23,8 @@ def load_and_reorient_pair(path, binarize=False):
     ----------
     path : str
         Path to a .nii or .nii.gz file
-    binarize : bool
-        If True, threshold data > 0 → 1
+    binarize : float or None
+        If given, threshold data > binarize → 1 (else 0)
 
     Returns
     -------
@@ -38,8 +38,8 @@ def load_and_reorient_pair(path, binarize=False):
     img = nib.as_closest_canonical(img)
     arr = img.get_fdata()
 
-    if binarize:
-        arr = (arr > 0).astype(np.uint8)
+    if binarize is not None:
+        arr = (arr > binarize).astype(np.uint8)
 
     # voxel sizes in mm
     zooms = img.header.get_zooms()[:3]

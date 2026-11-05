@@ -215,7 +215,7 @@ def _draw_marginal(hax, y, yedges, top=False):
     hax.grid(True, axis='y' if top else 'x',
              linestyle='--', linewidth=0.5, alpha=0.5)
 
-def plot_volume_scatter(df, outfile, bins_per_decade=10):
+def plot_volume_scatter(df, outfile, bins_per_decade=10, lesion=False):
     """
     Heatmap of manual vs. automated volume (count per cell) on log axes with
     square cells (`bins_per_decade` per factor of 10, same grid on both
@@ -223,6 +223,10 @@ def plot_volume_scatter(df, outfile, bins_per_decade=10):
     the identity line, and
     a manual/auto zero-vs-nonzero confusion table. Cases with a zero volume
     cannot sit on log axes; they are counted in the table (FN, FP, TN).
+
+    With `lesion`, rows are lesions (manual lesions + false-positive blobs):
+    TP / FN count manual lesions with / without overlap (the 'detected'
+    column), FP counts false-positive blobs, and TN does not apply.
     """
     manual = df['vol_manual_cc']
     auto   = df['vol_auto_cc']
@@ -230,10 +234,17 @@ def plot_volume_scatter(df, outfile, bins_per_decade=10):
     # Confusion matrix components
     mpos = manual > 0
     apos = auto   > 0
-    TP = int((mpos & apos).sum())
-    FN = int((mpos & ~apos).sum())
-    FP = int((~mpos & apos).sum())
-    TN = int((~mpos & ~apos).sum())
+    if lesion:
+        det = (df['detected'] == True)  # NaN for false-positive blobs
+        TP = int((mpos & det).sum())
+        FN = int((mpos & ~det).sum())
+        FP = int((~mpos).sum())
+        TN = '–'
+    else:
+        TP = int((mpos & apos).sum())
+        FN = int((mpos & ~apos).sum())
+        FP = int((~mpos & apos).sum())
+        TN = int((~mpos & ~apos).sum())
 
     # Pearson correlation
     pr = _corr(pearsonr, manual, auto)
@@ -274,9 +285,14 @@ def plot_volume_scatter(df, outfile, bins_per_decade=10):
     legend_ax.text(0, 0.95, f'Pearson r = {pr:.2f}',
                    transform=legend_ax.transAxes,
                    fontsize=11, va='top')
-    cell_text = [['',           'Auto > 0',   'Auto = 0'],
-                 ['Manual > 0', f'TP = {TP}', f'FN = {FN}'],
-                 ['Manual = 0', f'FP = {FP}', f'TN = {TN}']]
+    if lesion:
+        cell_text = [['',               'Overlap',    'No overlap'],
+                     ['Manual lesion',  f'TP = {TP}', f'FN = {FN}'],
+                     ['Auto only',      f'FP = {FP}', TN]]
+    else:
+        cell_text = [['',           'Auto > 0',   'Auto = 0'],
+                     ['Manual > 0', f'TP = {TP}', f'FN = {FN}'],
+                     ['Manual = 0', f'FP = {FP}', f'TN = {TN}']]
     tbl = legend_ax.table(cellText=cell_text, cellLoc='center',
                           loc='center', bbox=[0, 0.35, 1, 0.4])
     tbl[0, 0].set_visible(False)
@@ -287,7 +303,7 @@ def plot_volume_scatter(df, outfile, bins_per_decade=10):
     plt.close(fig)
 
 def plot_dice_vs_volume(df, outfile, dice_thresh=0.2, dice_bin=0.05,
-                        bins_per_decade=10):
+                        bins_per_decade=10, unit='patients', extra_stats=None):
     """
     Heatmap of DICE vs. manual volume (count per cell), with a marginal
     Dice histogram sharing the Dice axis and the heatmap's Dice bins.
@@ -296,6 +312,9 @@ def plot_dice_vs_volume(df, outfile, dice_thresh=0.2, dice_bin=0.05,
     (`bins_per_decade` per factor of 10, so 1 cc, 10 cc, ... are always edges)
     and run from the smallest to the largest volume; the panel widens with
     the volume range instead of changing the bin count.
+
+    `unit` names the rows in the stats panel ('patients' or 'lesions');
+    `extra_stats` replaces the 'Manual zeros' line when given.
     """
     manual = df['vol_manual_cc']
     dice   = df['Dice']
@@ -342,9 +361,9 @@ def plot_dice_vs_volume(df, outfile, dice_thresh=0.2, dice_bin=0.05,
     stats = [
         f'Pearson r = {pr:.2f}',
         f'Spearman r = {sr:.2f}',
-        f'# patients (Dice≥{dice_thresh:g}) = {n_hit} ({dr:.1f}%)',
-        f'Manual zeros = {zero_manual}'
-    ]
+        f'# {unit} (Dice≥{dice_thresh:g}) = {n_hit} ({dr:.1f}%)',
+    ] + (extra_stats if extra_stats is not None
+         else [f'Manual zeros = {zero_manual}'])
     for i, txt in enumerate(stats):
         legend_ax.text(0, 0.9 - i*0.15, txt,
                        transform=legend_ax.transAxes,
@@ -357,8 +376,9 @@ def plot_metric_bars(values, colourmap, measures, info, outfile):
     """
     Bar-plot alternative to the radar: solid bars show the median of each
     metric, error bars the IQR, and each case is drawn on top as a
-    translucent, horizontally jittered point coloured by automated volume
-    (same colour scale as the radar).
+    translucent, horizontally jittered point coloured by manual lesion
+    volume (same colour scale as the radar). Each case keeps the same
+    horizontal offset in every bar, so a case can be followed across bars.
     """
     values  = np.asarray(values, dtype=float)
     medians = np.nanmedian(values, axis=0)
@@ -384,12 +404,11 @@ def plot_metric_bars(values, colourmap, measures, info, outfile):
                 fmt='none', ecolor='#1b4d47', elinewidth=1.5, capsize=5,
                 zorder=3)
 
-    rng = np.random.default_rng(0)
+    jitter = np.random.default_rng(0).uniform(-0.2, 0.2, values.shape[0])
     for j in range(len(measures)):
         y    = values[:, j]
         mask = np.isfinite(y)
-        jitter = rng.uniform(-0.2, 0.2, mask.sum())
-        ax.scatter(x[j] + jitter, y[mask], c=colourmap[mask],
+        ax.scatter(x[j] + jitter[mask], y[mask], c=colourmap[mask],
                    cmap=cmap, norm=norm, s=12, alpha=0.4, edgecolors='none',
                    zorder=2)
 
@@ -415,15 +434,19 @@ def plot_metric_bars(values, colourmap, measures, info, outfile):
         plt.show()
     plt.close(fig)
 
-def plot_detection_curve(coverages, outfile, n_boot=1000, seed=0):
+def plot_detection_curve(coverages, outfile, n_boot=1000, seed=0,
+                         unit='lesions'):
     """
-    Lesion-wise detection curve. A lesion counts as detected at threshold t
-    if the automated mask covers at least a fraction t of it (and overlaps it
-    at all, so t = 0 means "any overlap" rather than 100%). The line is the
-    pooled % of all lesions detected; the band is a 95% bootstrap CI from
-    resampling cases, so lesions of the same case stay together.
+    Detection curve. An item (lesion, or a patient's whole lesion mask)
+    counts as detected at threshold t if the automated mask covers at least
+    a fraction t of it (and overlaps it at all, so t = 0 means "any overlap"
+    rather than 100%). The line is the pooled % of items detected; the band
+    is a 95% bootstrap CI from resampling patients, so lesions of the same
+    patient stay together.
 
-    coverages : list of 1-D arrays, per-lesion coverage for each case
+    coverages : list of 1-D arrays, one per patient: the coverage of each of
+                its lesions (unit='lesions'), or a single value, the patient's
+                total lesion coverage (unit='patients')
     """
     coverages = [np.asarray(c) for c in coverages if len(c)]
     if not coverages:
@@ -460,7 +483,7 @@ def plot_detection_curve(coverages, outfile, n_boot=1000, seed=0):
     ax.plot(thresholds, pooled, color=BLUE, linewidth=2)
 
     ax.set_xlabel('Lesion Coverage Threshold', fontsize=12)
-    ax.set_ylabel('Lesions Detected (%)', fontsize=12)
+    ax.set_ylabel(f'{unit.capitalize()} Detected (%)', fontsize=12)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 100)
     ax.tick_params(labelsize=10)
@@ -471,11 +494,12 @@ def plot_detection_curve(coverages, outfile, n_boot=1000, seed=0):
     # Side‐panel
     legend_ax.axis('off')
     stats = [
-        f'Lesions = {len(all_cov)} ({P} cases)',
+        (f'Lesions = {len(all_cov)} ({P} patients)' if unit == 'lesions'
+         else f'Patients = {P}'),
         f'Any overlap = {any_hit:.1f}%',
         f'Coverage ≥ 50% = {half_hit:.1f}%',
         f'Median coverage = {np.median(all_cov):.2f}',
-        f'Band: 95% CI ({n_boot} case bootstraps)'
+        f'Band: 95% CI ({n_boot} patient bootstraps)'
     ]
     for i, txt in enumerate(stats):
         legend_ax.text(0, 0.9 - i*0.15, txt,

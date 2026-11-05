@@ -5,7 +5,8 @@ Defines segmentation comparison metrics between two binary numpy arrays,
 including overlap metrics (Dice, Jaccard, TPR, VS),
 agreement indices (ARI, ICC, Cohen’s Kappa),
 distance measures (HD, AVD),
-and information‐theoretic (NMI) and probabilistic (PBD) metrics.
+and information‐theoretic (NMI) metrics. PBD is not provided: for binary
+masks 1/(1+PBD) equals Dice.
 
 :Authors:
     Markus D. Schirmer
@@ -18,11 +19,6 @@ import numpy as np
 from scipy import ndimage
 from scipy.spatial.distance import directed_hausdorff
 from scipy.spatial import cKDTree
-from sklearn.metrics import (
-    normalized_mutual_info_score,
-    adjusted_rand_score,
-    cohen_kappa_score
-)
 
 # ─── Basic confusion‐matrix counts ───
 
@@ -79,23 +75,59 @@ def get_vs(A, B):
     denom = 2*TP + FP + FN
     return 1 - abs(FP - FN)/denom if denom else 1.0
 
+def _contingency(A, B):
+    """2x2 voxel contingency table [[TN, FP], [FN, TP]] as Python ints."""
+    TP, FP = int(get_truepos(A, B)), int(get_falsepos(A, B))
+    FN, TN = int(get_falseneg(A, B)), int(get_trueneg(A, B))
+    return [[TN, FP], [FN, TP]]
+
+def _entropy(counts, n):
+    p = np.array([c for c in counts if c > 0], dtype=float) / n
+    return float(-(p * np.log(p)).sum())
+
 def get_MI(A, B):
-    """Normalized Mutual Information (NMI) between two binary masks."""
-    flatA = (A > 0).ravel().astype(int)
-    flatB = (B > 0).ravel().astype(int)
-    return normalized_mutual_info_score(flatA, flatB)
+    """
+    Normalized Mutual Information 2·I(A;B) / (H(A) + H(B)) between two binary
+    masks, computed from the 2x2 contingency table (same values as
+    sklearn.metrics.normalized_mutual_info_score); 1.0 if both are constant.
+    """
+    C = _contingency(A, B)
+    n = sum(map(sum, C))
+    rows = [sum(C[0]), sum(C[1])]
+    cols = [C[0][0] + C[1][0], C[0][1] + C[1][1]]
+    hA, hB = _entropy(rows, n), _entropy(cols, n)
+    if hA == 0 and hB == 0:
+        return 1.0
+    mi = sum(C[i][j] / n * np.log(C[i][j] * n / (rows[i] * cols[j]))
+             for i in range(2) for j in range(2) if C[i][j])
+    return float(2 * max(mi, 0.0) / (hA + hB))
 
 
 # ─── Agreement & correlation ───
 
 def get_ARI(A, B):
-    """Adjusted Rand Index between two binary masks."""
-    flatA = (A > 0).ravel().astype(int)
-    flatB = (B > 0).ravel().astype(int)
-    return adjusted_rand_score(flatA, flatB)
+    """
+    Adjusted Rand Index between two binary masks, from voxel-pair counts of
+    the 2x2 contingency table in exact integer arithmetic (same values as
+    sklearn.metrics.adjusted_rand_score).
+    """
+    C = _contingency(A, B)
+    n = sum(map(sum, C))
+    rows = [sum(C[0]), sum(C[1])]
+    cols = [C[0][0] + C[1][0], C[0][1] + C[1][1]]
+    sum_sq = sum(c * c for r in C for c in r)
+    tp = sum_sq - n
+    fp = sum(C[i][j] * cols[j] for i in range(2) for j in range(2)) - sum_sq
+    fn = sum(C[i][j] * rows[i] for i in range(2) for j in range(2)) - sum_sq
+    tn = n * n - fp - fn - sum_sq
+    if fn == 0 and fp == 0:
+        return 1.0
+    return 2.0 * (tp * tn - fn * fp) / ((tp + fn) * (fn + tn) + (tp + fp) * (fp + tn))
 
 def get_ICC(A, B):
-    """Intraclass correlation coefficient (two-way mixed ICC(3,1))."""
+    """Intraclass correlation coefficient, one-way ICC(1,1) for two raters."""
+    A = (A > 0).astype(float)      # arithmetic below must not run on bools
+    B = (B > 0).astype(float)
     n = A.size
     mean_img = (A + B) / 2.0
     MS_w = np.sum((A - mean_img)**2 + (B - mean_img)**2) / n
@@ -104,28 +136,21 @@ def get_ICC(A, B):
     return (MS_b - MS_w)/denom if denom else 1.0
 
 def get_KAP(A, B):
-    """Cohen’s kappa between two binary masks (1.0 if both are empty)."""
-    flatA = (A > 0).ravel().astype(int)
-    flatB = (B > 0).ravel().astype(int)
-    if not flatA.any() and not flatB.any():
+    """
+    Cohen’s kappa (p_o − p_e) / (1 − p_e) between two binary masks, from the
+    2x2 contingency table (same values as sklearn.metrics.cohen_kappa_score);
+    1.0 if both are empty.
+    """
+    (TN, FP), (FN, TP) = _contingency(A, B)
+    if TP + FP + FN == 0:
         return 1.0
-    return cohen_kappa_score(flatA, flatB)
+    n  = TP + FP + FN + TN
+    po = (TP + TN) / n
+    pe = ((TP + FN) * (TP + FP) + (TN + FN) * (TN + FP)) / (n * n)
+    return float((po - pe) / (1 - pe)) if pe != 1 else float('nan')
 
 
 # ─── Probabilistic & distance metrics ───
-
-def get_PBD(A, B):
-    """
-    Probabilistic distance: normalized voxel-wise disagreement.
-    0 if both masks are empty, inf if they are non-empty but do not overlap.
-    """
-    A_bin = (A > 0)
-    B_bin = (B > 0)
-    intersection = np.sum(A_bin & B_bin)
-    if intersection == 0:
-        return 0.0 if not (A_bin.any() or B_bin.any()) else np.inf
-    return float(np.sum(np.abs(A_bin.astype(int) - B_bin.astype(int))) 
-                 / (2.0 * intersection))
 
 def get_HD(A, B):
     """Symmetric Hausdorff distance between two binary masks."""
@@ -184,20 +209,69 @@ def get_ODER(A, B):
         DE += size[~matched].sum()
     return float(OE / MTA), float(DE / MTA)
 
-def get_lesion_coverage(A, B):
+LESION_MEASURES = ['Dice', 'Jaccard', 'TPR', 'VS']
+
+def get_lesion_table(A, B, zooms=None):
     """
-    Per-lesion coverage: for each connected component (26-connectivity) of the
-    reference mask A, the fraction of its voxels that are also set in B.
-    Returns a 1-D array with one value in [0, 1] per lesion (empty if A is empty).
+    Lesion-wise comparison with the manual mask A as reference.
+
+    Lesions are the connected components (26-connectivity) of A. Automated
+    blobs (components of B) that touch any manual lesion are shared out
+    voxel by voxel to the nearest manual lesion (Euclidean distance in mm,
+    using `zooms`), so a blob spanning two lesions is split rather than
+    counted twice, and several blobs on one lesion are pooled. Automated
+    blobs touching no manual lesion are false-positive lesions.
+
+    Returns
+    -------
+    lesions : dict of 1-D arrays, one entry per manual lesion:
+        vol_manual_cc, vol_auto_cc, detected (any overlap), and the
+        LESION_MEASURES computed from the lesion vs. its assigned voxels.
+    fp_vol_cc : 1-D array, volume (cc) of each false-positive lesion.
     """
     A_bin = (A > 0)
     B_bin = (B > 0)
-    labels, n = _label26(A_bin)
-    if n == 0:
-        return np.zeros(0)
-    size    = np.bincount(labels.ravel(), minlength=n+1)[1:]
-    covered = np.bincount(labels[B_bin], minlength=n+1)[1:]
-    return covered / size
+    if zooms is None:
+        zooms = (1.0,) * A_bin.ndim
+    voxvol = float(np.prod(zooms)) / 1000.0
+
+    la, na = _label26(A_bin)
+    lb, nb = _label26(B_bin)
+    hit = np.unique(lb[A_bin & B_bin])
+    B_touch = np.isin(lb, hit[hit > 0])
+
+    fp_size = np.bincount(lb[B_bin & ~B_touch], minlength=nb+1)[1:]
+    fp_vol_cc = fp_size[fp_size > 0] * voxvol
+
+    if na == 0:
+        empty = {k: np.zeros(0) for k in
+                 ['vol_manual_cc', 'vol_auto_cc', 'detected'] + LESION_MEASURES}
+        return empty, fp_vol_cc
+
+    # Nearest manual lesion for every touching automated voxel, computed in
+    # the bounding box of A ∪ touching blobs (contains every manual lesion)
+    box = ndimage.find_objects((A_bin | B_touch).astype(np.uint8))[0]
+    sub_la = la[box]
+    _, idx = ndimage.distance_transform_edt(sub_la == 0, sampling=zooms,
+                                            return_indices=True)
+    owner = sub_la[tuple(idx)]
+
+    size_a = np.bincount(la.ravel(), minlength=na+1)[1:].astype(float)
+    size_b = np.bincount(owner[B_touch[box]], minlength=na+1)[1:].astype(float)
+    tp     = np.bincount(la[A_bin & B_bin], minlength=na+1)[1:].astype(float)
+    fp, fn = size_b - tp, size_a - tp
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        lesions = {
+            'vol_manual_cc': size_a * voxvol,
+            'vol_auto_cc':   size_b * voxvol,
+            'detected':      tp > 0,
+            'Dice':          2*tp / (2*tp + fp + fn),
+            'Jaccard':       tp / (tp + fp + fn),
+            'TPR':           tp / size_a,
+            'VS':            1 - np.abs(fp - fn) / (2*tp + fp + fn),
+        }
+    return lesions, fp_vol_cc
 
 
 # ─── Dispatcher ───
@@ -206,7 +280,9 @@ def get_values(A, B, measures):
     """
     Compute and return a dict of {metric_name: value} for each name in measures.
     """
+    A, B = (A > 0), (B > 0)    # binarize once; every metric thresholds at > 0
     vals = {}
+    oder = None
     for m in measures:
         if   m == 'Dice':        vals[m] = get_dice(A, B)
         elif m == 'Jaccard':     vals[m] = get_jaccard(A, B)
@@ -215,10 +291,11 @@ def get_values(A, B, measures):
         elif m == 'MI':          vals[m] = get_MI(A, B)
         elif m == 'ARI':         vals[m] = get_ARI(A, B)
         elif m == 'ICC':         vals[m] = get_ICC(A, B)
-        elif m == '1/(1+PBD)':   vals[m] = 1.0/(1.0 + get_PBD(A, B))
         elif m == 'KAP':         vals[m] = get_KAP(A, B)
         elif m == '1-OER' or m=='1-DER':
-            OER, DER = get_ODER(A, B)
+            if oder is None:
+                oder = get_ODER(A, B)      # shared by 1-OER and 1-DER
+            OER, DER = oder
             if m == '1-OER': vals[m] = 1.0 - OER
             else:            vals[m] = 1.0 - DER
         else:

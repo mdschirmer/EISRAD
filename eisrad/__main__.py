@@ -20,14 +20,104 @@ import numpy  as np
 import pandas as pd
 import nibabel as nib
 from optparse import OptionParser
+from concurrent.futures import ProcessPoolExecutor
 
 # Absolute imports to avoid shadowing std-lib io
 from eisrad         import __version__
 from eisrad.io      import load_and_reorient_pair
-from eisrad.metrics import get_values, get_lesion_coverage
+from eisrad.metrics import get_values, get_lesion_table, LESION_MEASURES
 from eisrad.reports import write_low_dice, write_high_vol_diff
 from eisrad.plots   import (plot_radar, plot_metric_bars, plot_volume_scatter,
                             plot_dice_vs_volume, plot_detection_curve)
+
+
+def _threshold_callback(option, opt_str, value, parser):
+    """-b [T]: take the next argument as threshold T if it is a number."""
+    threshold = 0.0
+    if parser.rargs:
+        try:
+            threshold = float(parser.rargs[0])
+            del parser.rargs[0]
+        except ValueError:
+            pass
+    setattr(parser.values, option.dest, threshold)
+
+
+def _suffixed(path, suffix):
+    """'out/plot.png', '_lesion' -> 'out/plot_lesion.png'"""
+    root, ext = os.path.splitext(path)
+    return root + suffix + ext
+
+
+def _default_jobs():
+    """Available CPUs minus one (at least 1), respecting CPU affinity limits."""
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:          # not available on macOS / Windows
+        n = os.cpu_count() or 1
+    return max(1, n - 1)
+
+
+def _process_pair(task):
+    """
+    Load one manual/auto pair and compute everything EISRAD needs from it.
+    Runs in a worker process with -j > 1, so it returns plain data and the
+    messages to print instead of printing itself.
+    """
+    idx, mfile, afile, binarize, measures = task
+    res = {'skip': True, 'messages': [], 'mfile': mfile, 'afile': afile}
+    if not os.path.isfile(mfile) or not os.path.isfile(afile):
+        res['messages'].append(f"⚠️  Skipping missing: {mfile}, {afile}")
+        return res
+    res['messages'].append(f"ℹ️  Loading file pair: {mfile}, {afile}")
+
+    # Load & reorient both, optionally binarize
+    A, zooms = load_and_reorient_pair(mfile, binarize)
+    B, _     = load_and_reorient_pair(afile, binarize)
+
+    if A.shape != B.shape:
+        res['messages'].append(f"⚠️  Shape mismatch: {mfile} vs {afile}")
+        return res
+
+    # Metrics and volumes assume 0/1 masks: binarize others at 0.5
+    res['binarized'] = []
+    if not np.isin(A, (0, 1)).all():
+        A = (A > 0.5).astype(np.uint8)
+        res['binarized'].append(mfile)
+    if not np.isin(B, (0, 1)).all():
+        B = (B > 0.5).astype(np.uint8)
+        res['binarized'].append(afile)
+
+    # Compute similarity metrics
+    vals_dict  = get_values(A, B, measures)
+    res['row'] = [round(vals_dict[m],3) for m in measures]
+
+    # Compute volumes (cc)
+    res['vm'] = A.sum() * np.prod(zooms) / 1000.0
+    res['va'] = B.sum() * np.prod(zooms) / 1000.0
+
+    # Per-lesion table (manual lesions + false-positive automated blobs);
+    # lesion TPR is the coverage used by the detection curve
+    les, fp_vol = get_lesion_table(A, B, zooms)
+    res['coverage'] = les['TPR']
+    # Patient-level coverage: share of the whole manual lesion mask found
+    res['pat_cov'] = (np.array([vals_dict['TPR']]) if les['TPR'].size
+                      else np.zeros(0))
+    rows = []
+    for i in range(len(les['vol_manual_cc'])):
+        lrow = {'manual': mfile, 'auto': afile, 'lesion': i + 1,
+                'type': 'manual'}
+        lrow.update({k: les[k][i] for k in les})
+        rows.append(lrow)
+    for j, v in enumerate(fp_vol):
+        rows.append({'manual': mfile, 'auto': afile,
+                     'lesion': j + 1, 'type': 'false_positive',
+                     'vol_manual_cc': 0.0, 'vol_auto_cc': v,
+                     'detected': np.nan, 'Dice': 0.0,
+                     'Jaccard': 0.0, 'TPR': np.nan, 'VS': 0.0})
+    res['lesion_rows'] = rows
+    res['skip'] = False
+    return res
 
 
 def main(argv=None):
@@ -41,20 +131,29 @@ def main(argv=None):
     parser.add_option('-o','--output',   dest='o',
                       default='polar_results.png', help='Radar plot output file')
     parser.add_option('-r','--results',  dest='r',    help='Metrics CSV output file')
-    parser.add_option('-b','--binarize', action='store_true', default=False,
-                      help='Threshold segmentations (>0→1)')
+    parser.add_option('-b','--binarize', action='callback', dest='binarize',
+                      callback=_threshold_callback, default=None,
+                      help='Usage: -b [T]. Binarize all masks at > T '
+                           '(-b alone: T = 0). '
+                           'Without -b, only non-binary masks are binarized, '
+                           'at > 0.5')
     parser.add_option('-d','--display',  action='store_true', default=False,
                       help='Show plots interactively')
+    parser.add_option('-j','--jobs',     dest='jobs', type='int',
+                      default=_default_jobs(),
+                      help='Number of file pairs processed in parallel '
+                           '(default: available CPUs - 1, here %default)')
     parser.add_option('-v','--verbose',  action='store_true', default=False,
                       help='Print per-pair details')
     parser.add_option('-m','--min',      dest='min',   default=None,
                       help='Colorbar minimum value')
     parser.add_option('-M','--max',      dest='max',   default=None,
                       help='Colorbar maximum value')
-    parser.add_option('-L','--label',    dest='label', default='',
-                      help='Colorbar label')
-    parser.add_option('-u','--unit',     dest='unit',  default='',
-                      help='Colorbar unit')
+    parser.add_option('-L','--label',    dest='label',
+                      default='Manual lesion volume',
+                      help='Colorbar label (default: Manual lesion volume)')
+    parser.add_option('-u','--unit',     dest='unit',  default='cc',
+                      help='Colorbar unit (default: cc)')
     parser.add_option('-l','--log',      action='store_true', default=False,
                       help='Use log-scaled colorbar')
 
@@ -110,55 +209,47 @@ def main(argv=None):
 
     # Prepare to collect metrics & volumes
     measures    = ['Dice','Jaccard','TPR','VS','MI','ARI','ICC',
-                   '1/(1+PBD)','KAP','1-OER','1-DER']
+                   'KAP','1-OER','1-DER']
     data        = []
     manual_cc   = []
     auto_cc     = []
     coverages   = []
+    pat_cov     = []
+    lesion_rows = []
     valid_pairs = []
     binarized   = []
 
-    # Process each pair
-    for idx,(mfile,afile) in enumerate(file_list):
-        if not os.path.isfile(mfile) or not os.path.isfile(afile):
-            print(f"⚠️  Skipping missing: {mfile}, {afile}")
+    # Process each pair (optionally in parallel; results keep input order)
+    tasks = [(idx, mfile, afile, opts.binarize, measures)
+             for idx, (mfile, afile) in enumerate(file_list)]
+    if opts.jobs < 1:
+        print("❌ -j/--jobs must be at least 1.")
+        sys.exit(1)
+    if opts.jobs > 1:
+        pool    = ProcessPoolExecutor(max_workers=opts.jobs)
+        results = pool.map(_process_pair, tasks, chunksize=4)
+    else:
+        pool    = None
+        results = map(_process_pair, tasks)
+
+    for idx, res in enumerate(results):
+        for msg in res['messages']:
+            print(msg)
+        if res['skip']:
             continue
-        print(f"ℹ️  Loading file pair: {mfile}, {afile}")
-
-        # Load & reorient both, optionally binarize
-        A, zooms = load_and_reorient_pair(mfile, opts.binarize)
-        B, _     = load_and_reorient_pair(afile, opts.binarize)
-
-        if A.shape != B.shape:
-            print(f"⚠️  Shape mismatch: {mfile} vs {afile}")
-            continue
-
-        # Metrics and volumes assume 0/1 masks: binarize others at 0.5
-        if not np.isin(A, (0, 1)).all():
-            A = (A > 0.5).astype(np.uint8)
-            binarized.append(mfile)
-        if not np.isin(B, (0, 1)).all():
-            B = (B > 0.5).astype(np.uint8)
-            binarized.append(afile)
-
-        # Compute similarity metrics
-        vals_dict = get_values(A, B, measures)
-        row       = [round(vals_dict[m],3) for m in measures]
-        data.append(row)
-
-        # Compute volumes (cc)
-        vm = A.sum() * np.prod(zooms) / 1000.0
-        va = B.sum() * np.prod(zooms) / 1000.0
-        manual_cc.append(vm)
-        auto_cc.append(va)
-
-        # Per-lesion coverage (only needed for the detection curve)
-        if opts.dc:
-            coverages.append(get_lesion_coverage(A, B))
-
-        valid_pairs.append((mfile, afile))
+        binarized.extend(res['binarized'])
+        data.append(res['row'])
+        manual_cc.append(res['vm'])
+        auto_cc.append(res['va'])
+        coverages.append(res['coverage'])
+        pat_cov.append(res['pat_cov'])
+        lesion_rows.extend(res['lesion_rows'])
+        valid_pairs.append((res['mfile'], res['afile']))
         if opts.verbose:
-            print(f"✔️  Pair {idx}: Dice={row[0]}, vol_auto={va:.1f}cc")
+            print(f"✔️  Pair {idx}: Dice={res['row'][0]}, "
+                  f"vol_auto={res['va']:.1f}cc")
+    if pool is not None:
+        pool.shutdown()
 
     # Report skipped
     skipped = total_pairs - len(valid_pairs)
@@ -193,8 +284,8 @@ def main(argv=None):
 
     # Radar plot
     info = {
-        'minimum': round(min(auto_cc),2) if min_val is None else min_val,
-        'maximum': round(max(auto_cc),2) if max_val is None else max_val,
+        'minimum': round(min(manual_cc),2) if min_val is None else min_val,
+        'maximum': round(max(manual_cc),2) if max_val is None else max_val,
         'label':   opts.label,
         'unit':    opts.unit,
         'logplot': opts.log,
@@ -211,7 +302,7 @@ def main(argv=None):
 
     plot_radar(
         values    = plot_vals,
-        colourmap = np.asarray(auto_cc),
+        colourmap = np.asarray(manual_cc),
         measures  = measures,
         info      = info,
         outfile   = opts.o
@@ -219,14 +310,51 @@ def main(argv=None):
 
     # Optional plots
     if opts.bar:
-        plot_metric_bars(plot_vals, np.asarray(auto_cc),
+        plot_metric_bars(plot_vals, np.asarray(manual_cc),
                          measures, info, opts.bar)
     if opts.sv:
         plot_volume_scatter(df_out, opts.sv)
     if opts.sd:
         plot_dice_vs_volume(df_out, opts.sd, opts.dice_thresh)
     if opts.dc:
-        plot_detection_curve(coverages, opts.dc)
+        plot_detection_curve(pat_cov, opts.dc, unit='patients')
+        plot_detection_curve(coverages, _suffixed(opts.dc, '_lesion'),
+                             unit='lesions')
+
+    # Per-lesion versions
+    df_les = pd.DataFrame(lesion_rows, columns=[
+        'manual', 'auto', 'lesion', 'type', 'vol_manual_cc',
+        'vol_auto_cc', 'detected'] + LESION_MEASURES)
+    if opts.r:
+        df_les.to_csv(_suffixed(opts.r, '_lesions'), index=False)
+    man   = df_les[df_les['type'] == 'manual']
+    n_fp  = int((df_les['type'] == 'false_positive').sum())
+    print(f"ℹ️  {len(man)} manual lesions, {n_fp} false-positive lesions.")
+
+    if man.empty:
+        if opts.bar or opts.sd:
+            print("⚠️  No lesions in manual masks → skipping per-lesion "
+                  "bar plot and Dice heatmap.")
+    else:
+        if opts.bar:
+            vols = man['vol_manual_cc'].to_numpy()
+            info_les = dict(info,
+                            minimum=round(vols.min(), 2),
+                            maximum=round(vols.max(), 2),
+                            label='Manual lesion volume', unit='cc')
+            if info_les['minimum'] == info_les['maximum']:
+                info_les['maximum'] += 1e-6
+            plot_metric_bars(man[LESION_MEASURES].to_numpy(dtype=float),
+                             vols, LESION_MEASURES, info_les,
+                             _suffixed(opts.bar, '_lesion'))
+        if opts.sd:
+            plot_dice_vs_volume(
+                man, _suffixed(opts.sd, '_lesion'), opts.dice_thresh,
+                unit='lesions',
+                extra_stats=[f'False-positive lesions = {n_fp}'])
+    if opts.sv and not df_les.empty:
+        plot_volume_scatter(df_les, _suffixed(opts.sv, '_lesion'),
+                            lesion=True)
 
     if n_neg.any():
         counts = ', '.join(f"{m}: {c}" for m, c in zip(measures, n_neg) if c)
@@ -234,7 +362,7 @@ def main(argv=None):
               f"(metrics CSV keeps raw values) — {counts}")
     if binarized:
         print(f"⚠️  {len(binarized)} non-binary mask(s) were binarized at 0.5 "
-              f"(> 0.5 → 1); use -b to binarize at > 0 instead:")
+              f"(> 0.5 → 1); use -b [T] to binarize all masks at > T:")
         for f in binarized:
             print(f"     {f}")
 
