@@ -10,3 +10,7 @@ dist/
 # Virtual environments
 .venv/
 venv/
+
+# EISRAD result tables (may contain patient file paths)
+metrics.csv
+metrics_lesions.csv

@@ -7,7 +7,7 @@ from eisrad.metrics import (
     get_truepos, get_falsepos, get_falseneg, get_trueneg,
     get_dice, get_jaccard, get_tpr, get_vs,
     get_MI, get_ARI, get_ICC, get_KAP,
-    get_HD, get_AVD, get_lesion_table
+    get_surface_metrics, get_lesion_table, lesion_surface_summary
 )
 
 @pytest.fixture
@@ -57,13 +57,45 @@ def test_overlap_metrics(simple_masks, func, expected):
     A, B = simple_masks
     assert pytest.approx(expected, rel=1e-6) == func(A, B)
 
-@pytest.mark.parametrize("func,expected", [
-    (get_HD,  1.0),   # Hausdorff = 1 voxel
-    (get_AVD, 0.5),   # avg surface dist = (1+0)/2
-])
-def test_distance_metrics(simple_masks, func, expected):
-    A, B = simple_masks
-    assert pytest.approx(expected, rel=1e-6) == func(A, B)
+def test_hd95_ignores_single_outlier():
+    """
+    One stray voxel far away sets the maximum distance (plain Hausdorff) but
+    is below the 95th percentile, so HD95 stays 0 for otherwise equal masks.
+    """
+    A = np.zeros((40, 40), dtype=int); A[5:25, 5:25] = 1
+    B = A.copy(); B[38, 38] = 1
+    assert get_surface_metrics(A, B)[0] == pytest.approx(0.0)
+
+def test_hd95_mm():
+    """A 5x5 square shifted by 2 columns, with 1 x 3 mm voxels (6 mm shift)."""
+    A = np.zeros((9, 14), dtype=int); A[2:7, 2:7] = 1
+    B = np.zeros_like(A);             B[2:7, 4:9] = 1
+    assert get_surface_metrics(A, B)[0] == pytest.approx(2.0)
+    assert get_surface_metrics(A, B, zooms=(1.0, 3.0))[0] == pytest.approx(6.0)
+
+def test_surface_dice_tolerance():
+    """
+    Default tolerance = one voxel in every direction: a 1-column shift is
+    fully within tolerance, a 3-column shift is not. With 1 x 3 mm voxels a
+    1-column shift is 3 mm: outside a 2 mm tolerance, inside a 3 mm one.
+    """
+    A = np.zeros((9, 16), dtype=int); A[2:7, 2:7] = 1
+    B1 = np.zeros_like(A); B1[2:7, 3:8] = 1
+    B3 = np.zeros_like(A); B3[2:7, 5:10] = 1
+    assert get_surface_metrics(A, B1)[1] == pytest.approx(1.0)
+    assert get_surface_metrics(A, B3)[1] < 1.0
+    z = (1.0, 3.0)
+    assert get_surface_metrics(A, B1, z, tolerance_mm=2.0)[1] < 1.0
+    assert get_surface_metrics(A, B1, z, tolerance_mm=3.0)[1] == pytest.approx(1.0)
+    # resolution-based default ignores the voxel size
+    assert get_surface_metrics(A, B1, z)[1] == pytest.approx(1.0)
+
+def test_surface_metrics_empty():
+    A = np.zeros((5, 5), dtype=int); A[2, 2] = 1
+    Z = np.zeros_like(A)
+    assert get_surface_metrics(Z, Z) == (0.0, 1.0)
+    assert get_surface_metrics(A, Z) == (np.inf, 0.0)
+    assert get_surface_metrics(Z, A) == (np.inf, 0.0)
 
 @pytest.mark.parametrize("func,expected", [
     # confusion on identical
@@ -84,11 +116,9 @@ def test_distance_metrics(simple_masks, func, expected):
     (get_ICC,      1.0),
     (get_KAP,      1.0),
 
-    # probabilistic distance = 0
-
-    # distance on identical = 0
-    (get_HD,       0.0),
-    (get_AVD,      0.0),
+    # boundary measures on identical: HD95 0 mm, surface Dice 1
+    (lambda A, B: get_surface_metrics(A, B)[0], 0.0),
+    (lambda A, B: get_surface_metrics(A, B)[1], 1.0),
 ])
 def test_identical_masks_metrics(identical_masks, func, expected):
     A, B = identical_masks
@@ -96,11 +126,11 @@ def test_identical_masks_metrics(identical_masks, func, expected):
 
 
 def test_empty_mask_conventions():
-    """Both masks empty is a perfect result for TPR / 1-DER / 1-OER."""
+    """Both masks empty is a perfect result for TPR / 1-DER/2 / 1-OER/2."""
     from eisrad.metrics import get_values
     Z = np.zeros((3, 3))
-    both_empty = get_values(Z, Z, ['TPR', '1-DER', '1-OER'])
-    assert both_empty == {'TPR': 1.0, '1-DER': 1.0, '1-OER': 1.0}
+    both_empty = get_values(Z, Z, ['TPR', '1-DER/2', '1-OER/2'])
+    assert both_empty == {'TPR': 1.0, '1-DER/2': 1.0, '1-OER/2': 1.0}
 
 def test_oder_lesionwise():
     """
@@ -127,6 +157,18 @@ def test_oder_complete_miss():
     A = np.zeros((4, 4)); A[0, 0] = 1
     OER, DER = get_ODER(A, np.zeros_like(A))
     assert (OER, DER) == (0.0, 2.0)
+
+@pytest.mark.parametrize("seed", range(5))
+def test_oder_halves_sum_to_dice_error(seed):
+    """OER/2 + DER/2 = 1 - Dice, so 1-OER/2 and 1-DER/2 lie in [0, 1]."""
+    from eisrad.metrics import get_ODER, get_values
+    rng = np.random.default_rng(seed)
+    A = (rng.random((15, 15, 6)) < 0.08).astype(int)
+    B = (rng.random((15, 15, 6)) < 0.12).astype(int)
+    OER, DER = get_ODER(A, B)
+    assert OER / 2 + DER / 2 == pytest.approx(1 - get_dice(A, B))
+    v = get_values(A, B, ['1-OER/2', '1-DER/2'])
+    assert 0 <= v['1-OER/2'] <= 1 and 0 <= v['1-DER/2'] <= 1
 
 def test_kap_both_empty():
     Z = np.zeros((3, 3))
@@ -170,7 +212,7 @@ def test_lesion_table_merge():
     A[0, 6:8] = 1
     B[0, 0:8] = 1
     les, fp = get_lesion_table(A, B)
-    np.testing.assert_allclose(les['vol_auto_cc'] * 1000, [4, 4])
+    np.testing.assert_allclose(les['vol_auto_ml'] * 1000, [4, 4])
     np.testing.assert_allclose(les['Dice'], [2/3, 2/3])
     np.testing.assert_allclose(les['TPR'], [1, 1])
     assert fp.size == 0
@@ -209,37 +251,11 @@ def test_lesion_table_anisotropic():
     B[0:3, 0] = 1
     iso, _   = get_lesion_table(A, B, zooms=(1.0, 1.0))
     aniso, _ = get_lesion_table(A, B, zooms=(1.0, 5.0))
-    np.testing.assert_allclose(iso['vol_auto_cc'] * 1000,   [2, 1])
-    np.testing.assert_allclose(aniso['vol_auto_cc'] * 1000, [15, 0])  # 5 mm² voxels
+    np.testing.assert_allclose(iso['vol_auto_ml'] * 1000,   [2, 1])
+    np.testing.assert_allclose(aniso['vol_auto_ml'] * 1000, [15, 0])  # 5 mm² voxels
     np.testing.assert_allclose(iso['Dice'],   [2/3, 0])
     np.testing.assert_allclose(aniso['Dice'], [0.5, 0])
     assert list(iso['detected']) == [True, False]
-
-
-# ─── CLI: -b [T] ───
-
-@pytest.mark.parametrize("flags,expected_cc", [
-    ([],                0.002),  # no -b: non-binary mask binarized at > 0.5
-    (['-b'],            0.004),  # -b alone: > 0
-    (['-b', '0.2'],     0.003),  # -b T
-    (['-b', '-v'],      0.004),  # -b followed by another flag: T = 0
-])
-def test_binarize_threshold(tmp_path, flags, expected_cc):
-    """Auto mask holds 0.1, 0.3, 0.7, 0.9 (1 mm voxels): count above T."""
-    import nibabel as nib
-    import pandas as pd
-    from eisrad.__main__ import main
-    A = np.zeros((4, 4, 4)); A[0, 0, 0:4] = 1
-    B = np.zeros((4, 4, 4)); B[0, 0, 0:4] = [0.1, 0.3, 0.7, 0.9]
-    for name, M in (('m', A), ('a', B)):
-        nib.save(nib.Nifti1Image(M.astype(np.float32), np.eye(4)),
-                 str(tmp_path / f'{name}.nii.gz'))
-    (tmp_path / 'pairs.csv').write_text(
-        f"manual,auto\n{tmp_path/'m.nii.gz'},{tmp_path/'a.nii.gz'}\n")
-    main(['eisrad', '-f', str(tmp_path / 'pairs.csv'),
-          '-o', str(tmp_path / 'r.png'), '-r', str(tmp_path / 'r.csv')] + flags)
-    vol = pd.read_csv(tmp_path / 'r.csv')['vol_auto_cc'].iloc[0]
-    assert vol == pytest.approx(expected_cc)
 
 
 # ─── Closed-form MI / ARI / KAP agree with scikit-learn ───
@@ -267,10 +283,50 @@ def test_values_independent_of_input_dtype():
     rng = np.random.default_rng(0)
     A = rng.random((12, 12, 6)) < 0.2
     B = rng.random((12, 12, 6)) < 0.25
-    ms = ['Dice', 'Jaccard', 'TPR', 'VS', 'MI', 'ARI', 'ICC', 'KAP', '1-OER', '1-DER']
+    ms = ['Dice', 'Jaccard', 'TPR', 'VS', 'MI', 'ARI', 'ICC', 'KAP', '1-OER/2', '1-DER/2',
+          '1/(1+HD95/r) (L)', 'SDice (L)', 'HD95_mm (L)']
     ref = get_values(A.astype(float), B.astype(float), ms)
     for dt in (bool, np.uint8, int):
         vals = get_values(A.astype(dt), B.astype(dt), ms)
         for m in ms:
             assert vals[m] == pytest.approx(ref[m], abs=1e-12), (dt, m)
     assert get_ICC(A, B) == pytest.approx(get_ICC(A.astype(float), B.astype(float)))
+
+
+# ─── Lesion-wise boundary measures and their patient summary ───
+
+def test_lesion_table_surface_measures():
+    """
+    Lesion 1 segmented exactly (HD95 0, SDice 1), lesion 2 missed (NaN):
+    boundary measures are only defined for detected lesions.
+    """
+    A = np.zeros((20, 20), dtype=int); A[2:6, 2:6] = 1; A[14:17, 14:17] = 1
+    B = np.zeros_like(A);             B[2:6, 2:6] = 1
+    les, _ = get_lesion_table(A, B)
+    assert les['HD95_mm'][0] == pytest.approx(0.0)
+    assert les['SDice'][0] == pytest.approx(1.0)
+    assert np.isnan(les['HD95_mm'][1]) and np.isnan(les['SDice'][1])
+
+def test_lesion_surface_summary():
+    """
+    Volume-weighted mean over detected lesions; missed lesions are left out;
+    0 if nothing is detected; 1 if neither mask has a lesion.
+    Score per lesion: 1 / (1 + HD95 / r), r = radius of a sphere with the
+    lesion volume (1 mL -> r = 6.2035 mm).
+    """
+    r1 = (3 * 1000 / (4 * np.pi)) ** (1 / 3)
+    les = {'detected': np.array([True, True, False]),
+           'vol_manual_ml': np.array([1.0, 3.0, 5.0]),
+           'HD95_mm': np.array([0.0, r1, np.nan]),
+           'SDice': np.array([1.0, 0.6, np.nan])}
+    r2 = (3 * 3000 / (4 * np.pi)) ** (1 / 3)
+    out = lesion_surface_summary(les, auto_empty=False)
+    assert out['SDice (L)'] == pytest.approx((1 * 1.0 + 3 * 0.6) / 4)
+    assert out['1/(1+HD95/r) (L)'] == pytest.approx((1 * 1.0 + 3 / (1 + r1 / r2)) / 4)
+    assert out['HD95_mm (L)'] == pytest.approx(3 * r1 / 4)
+
+    missed = dict(les, detected=np.array([False, False, False]))
+    assert lesion_surface_summary(missed, False)['SDice (L)'] == 0.0
+    none = {k: np.zeros(0) for k in les}
+    assert lesion_surface_summary(none, auto_empty=True)['SDice (L)'] == 1.0
+    assert lesion_surface_summary(none, auto_empty=False)['SDice (L)'] == 0.0

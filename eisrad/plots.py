@@ -16,7 +16,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, LogFormatterMathtext, MaxNLocator
 from math import pi
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import pearsonr, spearmanr, rankdata
 
 BLUE = 'royalblue'
 TEAL = '#2a9d8f'
@@ -31,27 +31,37 @@ def _corr(func, x, y):
 def _intermediate_ticks(min_val, max_val, n=4):
     return list(np.linspace(min_val, max_val, num=n+2)[1:-1])
 
-def plot_radar(values, colourmap, measures, info, outfile='polar_results.png'):
+def plot_radar(values, colourmap, measures, info, outfile='polar_results.png',
+               show_points=True, density=False, density_bin=0.1,
+               density_label='% of cases'):
     """
-    Wider radar plot of multi-metric comparisons:
-      • Figure width increased to 12" so the middle colorbar can expand.
-      • GridSpec cols: [2, 0.2, 1] width ratios (radar : cbar : table).
+    Radar plot of multi-metric comparisons: median line, IQR band, a table
+    of median / quartiles and, with `show_points`, one dot per case coloured
+    by manual lesion volume (with colorbar). With `density`, each spoke
+    instead shows a heatmap strip: the % of cases (per spoke) in each value
+    bin of width `density_bin`, under the median line and IQR band.
+    Missing values (NaN, e.g. boundary measures of missed lesions) are left
+    out of the statistics.
     """
+    values = np.asarray(values, dtype=float)
     N = len(measures)
     angles = [n/float(N)*2*pi for n in range(N)]
     angles_closed = angles + [angles[0]]
 
     # Compute median and IQR
-    medians = np.median(values, axis=0)
-    q1      = np.percentile(values, 25, axis=0)
-    q3      = np.percentile(values, 75, axis=0)
+    medians = np.nanmedian(values, axis=0)
+    q1      = np.nanpercentile(values, 25, axis=0)
+    q3      = np.nanpercentile(values, 75, axis=0)
     med_closed = np.concatenate([medians, [medians[0]]])
     q1_closed  = np.concatenate([q1,      [q1[0]]])
     q3_closed  = np.concatenate([q3,      [q3[0]]])
 
     # Make the figure wider: 12" wide instead of 9"
     fig = plt.figure(figsize=(12, 6), dpi=300, constrained_layout=True)
-    gs  = fig.add_gridspec(1, 3, width_ratios=[2, 0.2, 1])
+    if show_points or density:
+        gs = fig.add_gridspec(1, 3, width_ratios=[2, 0.45, 1.1])
+    else:
+        gs = fig.add_gridspec(1, 2, width_ratios=[2, 1.1])
 
     # ── Radar subplot (left 2/3) ──
     ax = fig.add_subplot(gs[0, 0], polar=True)
@@ -59,11 +69,121 @@ def plot_radar(values, colourmap, measures, info, outfile='polar_results.png'):
     ax.set_yticks([0,0.2,0.4,0.6,0.8,1.0])
     ax.set_xticks(angles)
     ax.set_xticklabels(measures, fontsize=12)
+    # Align labels away from the circle so long names do not overlap it
+    for lab, ang in zip(ax.get_xticklabels(), angles):
+        c = np.cos(ang)
+        lab.set_horizontalalignment('left' if c > 0.1 else
+                                    'right' if c < -0.1 else 'center')
+    ax.tick_params(axis='x', pad=2)
+    # Ring numbers halfway between the first two spokes (Dice and Jaccard)
+    ax.set_rlabel_position(180.0 / N)
+    if density:
+        # Small hole in the centre so the spokes' 0-bins do not overlap
+        hole = 0.15
+        ax.set_rorigin(-hole)
+        # Extra unlabelled rings so every bin boundary sits on a ring
+        ax.yaxis.set_minor_locator(matplotlib.ticker.FixedLocator(
+            np.arange(density_bin, 1.0, density_bin)))
+        ax.grid(True, which='minor', linestyle='--', linewidth=0.5,
+                alpha=0.5)
+        _radar_density(fig, gs, ax, values, angles, density_bin, density_label)
     ax.fill_between(angles_closed, q1_closed, q3_closed,
-                    color='royalblue', alpha=0.2, zorder=1)
-    ax.plot(angles_closed, med_closed, color='royalblue', linewidth=2)
+                    color='royalblue', alpha=0.2, zorder=2)
+    ax.plot(angles_closed, med_closed, color='royalblue', linewidth=2,
+            zorder=4)
 
-    # Individual points
+    ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.5)
+    if density:
+        ax.set_axisbelow(True)     # rings under the segments
+        ax.xaxis.grid(False)       # no spoke lines; the segments mark them
+    if show_points:
+        _radar_points(fig, gs, ax, values, colourmap, angles, info)
+
+    # ── Table subplot (right) ──
+    tax = fig.add_subplot(gs[0, -1])
+    tax.axis('off')
+    col_labels = ['Median','25%','75%']
+    cell_text  = [
+        [f"{m:.2f}", f"{l:.2f}", f"{h:.2f}"]
+        for m,l,h in zip(medians, q1, q3)
+    ]
+    tbl = tax.table(
+        cellText=cell_text,
+        rowLabels=measures,
+        colLabels=col_labels,
+        cellLoc='center', rowLoc='center',
+        loc='center',
+        bbox=[0.25, 0.00, 0.75, 1.00]
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(8)
+    tbl.scale(1, 1.5)
+
+    # Save/display
+    plt.savefig(outfile, dpi=300, bbox_inches='tight')
+    if info.get('display', False):
+        plt.show()
+    plt.close(fig)
+
+def _radar_density(fig, gs, ax, values, angles, bin_width, label):
+    """
+    Heatmap along every spoke: % of the spoke's cases per value bin, drawn
+    as ring segments (empty bins white), with a shared colorbar in the
+    middle column. The centre hole (set_rorigin) keeps the inner segments
+    from shrinking to a point.
+    """
+    N      = len(angles)
+    edges  = np.linspace(0, 1, int(round(1 / bin_width)) + 1)
+    pct    = []
+    for j in range(N):
+        y = values[:, j]
+        y = np.clip(y[np.isfinite(y)], 0, 1)
+        counts, _ = np.histogram(y, bins=edges)
+        pct.append(100.0 * counts / max(len(y), 1))
+
+    # Colour classes covering 0-100%: fine 5% steps where most segments are,
+    # widening towards 100 so large shares keep their own class. EISRAD blue
+    # gradient (as in the heatmaps); more lesions = darker
+    bounds = [0, 5, 10, 15, 20, 30, 40, 60, 80, 100]
+    blues = matplotlib.colors.LinearSegmentedColormap.from_list(
+        'eisrad_blues', ['#c6d4f5', BLUE, '#0b1f66'])   # as in the heatmaps
+    cmap = matplotlib.colors.ListedColormap(
+        blues(np.linspace(0.0, 1.0, len(bounds) - 1)))
+    norm = matplotlib.colors.BoundaryNorm(bounds, cmap.N)
+
+    # Ring segments (annular sectors, drawn as polar bars so the edges follow
+    # the circles) of 30% of the spoke spacing; the polar axes place them
+    # correctly including the radial origin offset (hole)
+    width = 0.3 * (2 * pi / N)
+    for ang, p in zip(angles, pct):
+        # empty bins (exactly 0%) are white, so the spoke keeps its shape
+        colours = [cmap(norm(v)) if v > 0 else 'white' for v in p]
+        ax.bar(np.full(len(p), ang), np.diff(edges), width=width,
+               bottom=edges[:-1], color=colours,
+               edgecolor='white', linewidth=1, zorder=1)
+
+    cax = fig.add_subplot(gs[0, 1])
+    pos = cax.get_position()
+    new_h = pos.height * 0.8
+    # shift right so the colorbar clears the labels on the right of the radar
+    cax.set_position([pos.x0 + pos.width * 0.35,
+                      pos.y0 + (pos.height - new_h) / 2,
+                      pos.width * 0.35, new_h])
+    cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap),
+                      cax=cax, spacing='uniform')
+    cb.set_ticks(bounds)
+    cb.ax.minorticks_off()
+    cb.set_label(label, fontsize=12)
+    cax.tick_params(labelsize=10)
+
+def _radar_points(fig, gs, ax, values, colourmap, angles, info):
+    """
+    Dots per case on the radar, coloured by volume, plus the colorbar. Each
+    case's angular offset from the spoke follows its volume rank (smallest
+    clockwise, largest counter-clockwise), so a case sits at the same
+    position on every spoke and similar volumes sit together.
+    """
+    N = len(angles)
     if info.get('logplot', False):
         pos = colourmap[colourmap > 0]
         vmin = pos.min() if pos.size else 1e-6
@@ -74,19 +194,18 @@ def plot_radar(values, colourmap, measures, info, outfile='polar_results.png'):
         norm = matplotlib.colors.Normalize(vmin=info['minimum'],
                                            vmax=info['maximum'])
 
-    rng = np.random.default_rng(0)
+    n_cases = len(colourmap)
+    rank    = (rankdata(colourmap) - 1) / max(n_cases - 1, 1)   # 0 .. 1
+    offsets = (rank - 0.5) * 2 * 0.15 * (2 * pi / N)            # ±15% of spacing
     for i, y_vals in enumerate(values):
         mask = np.isfinite(y_vals)
         if not mask.any():
             continue
-        jitter = rng.standard_normal(mask.sum()) * (2*pi/N) / 20
-        angs_pt = np.array(angles)[mask] + jitter
+        angs_pt = np.array(angles)[mask] + offsets[i]
         cvals   = np.full(mask.sum(), colourmap[i])
         ax.scatter(angs_pt, y_vals[mask],
                    c=cvals, cmap='cividis', norm=norm,
                    s=20, zorder=3)
-
-    ax.grid(True, linestyle='--', linewidth=0.5, alpha=0.5)
 
     # ── Colorbar subplot (middle, now wider) ──
     cax = fig.add_subplot(gs[0, 1])
@@ -106,32 +225,6 @@ def plot_radar(values, colourmap, measures, info, outfile='polar_results.png'):
         label += f" ({info['unit']})"
     cb.set_label(label, fontsize=12)
     cax.tick_params(labelsize=10)
-
-    # ── Table subplot (right 1/3) ──
-    tax = fig.add_subplot(gs[0, 2])
-    tax.axis('off')
-    col_labels = ['Median','25%','75%']
-    cell_text  = [
-        [f"{m:.2f}", f"{l:.2f}", f"{h:.2f}"]
-        for m,l,h in zip(medians, q1, q3)
-    ]
-    tbl = tax.table(
-        cellText=cell_text,
-        rowLabels=measures,
-        colLabels=col_labels,
-        cellLoc='center', rowLoc='center',
-        loc='center',
-        bbox=[0.10, 0.00, 0.90, 1.00]
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8)
-    tbl.scale(1, 1.5)
-
-    # Save/display
-    plt.savefig(outfile, dpi=300, bbox_inches='tight')
-    if info.get('display', False):
-        plt.show()
-    plt.close(fig)
 
 def _log_edges(lo, hi, bins_per_decade=10):
     """Bin edges on a 10^(k/bins_per_decade) grid covering lo..hi (lo > 0)."""
@@ -228,8 +321,8 @@ def plot_volume_scatter(df, outfile, bins_per_decade=10, lesion=False):
     TP / FN count manual lesions with / without overlap (the 'detected'
     column), FP counts false-positive blobs, and TN does not apply.
     """
-    manual = df['vol_manual_cc']
-    auto   = df['vol_auto_cc']
+    manual = df['vol_manual_ml']
+    auto   = df['vol_auto_ml']
 
     # Confusion matrix components
     mpos = manual > 0
@@ -274,8 +367,8 @@ def plot_volume_scatter(df, outfile, bins_per_decade=10, lesion=False):
     ax.set_yscale('log')
     ax.set_xlim(edges[0], edges[-1])
     ax.set_ylim(edges[0], edges[-1])
-    ax.set_xlabel('Manual Lesion Volume (cc)', fontsize=12)
-    ax.set_ylabel('Automated Lesion Volume (cc)', fontsize=12)
+    ax.set_xlabel('Manual Lesion Volume (mL)', fontsize=12)
+    ax.set_ylabel('Automated Lesion Volume (mL)', fontsize=12)
 
     _draw_marginal(hax, y, edges)
     _draw_marginal(tax, x, edges, top=True)
@@ -309,14 +402,14 @@ def plot_dice_vs_volume(df, outfile, dice_thresh=0.2, dice_bin=0.05,
     Dice histogram sharing the Dice axis and the heatmap's Dice bins.
 
     Cells are square: volume bins are equally wide on the log axis
-    (`bins_per_decade` per factor of 10, so 1 cc, 10 cc, ... are always edges)
+    (`bins_per_decade` per factor of 10, so 1 mL, 10 mL, ... are always edges)
     and run from the smallest to the largest volume; the panel widens with
     the volume range instead of changing the bin count.
 
     `unit` names the rows in the stats panel ('patients' or 'lesions');
     `extra_stats` replaces the 'Manual zeros' line when given.
     """
-    manual = df['vol_manual_cc']
+    manual = df['vol_manual_ml']
     dice   = df['Dice']
 
     # Mask out zero volumes for axis, but still count them
@@ -349,7 +442,7 @@ def plot_dice_vs_volume(df, outfile, dice_thresh=0.2, dice_bin=0.05,
 
     ax.set_xscale('log')
     ax.set_xlim(xedges[0], xedges[-1])
-    ax.set_xlabel('Manual Lesion Volume (cc)', fontsize=12)
+    ax.set_xlabel('Manual Lesion Volume (mL)', fontsize=12)
     ax.set_ylabel('DICE Score', fontsize=12)
     ax.set_ylim(0, 1)
 
@@ -372,19 +465,28 @@ def plot_dice_vs_volume(df, outfile, dice_thresh=0.2, dice_bin=0.05,
     fig.savefig(outfile, dpi=300)
     plt.close(fig)
 
-def plot_metric_bars(values, colourmap, measures, info, outfile):
+def plot_metric_bars(values, colourmap, labels, info, outfile,
+                     higher_better=None, bounded=None):
     """
-    Bar-plot alternative to the radar: solid bars show the median of each
-    metric, error bars the IQR, and each case is drawn on top as a
-    translucent, horizontally jittered point coloured by manual lesion
-    volume (same colour scale as the radar). Each case keeps the same
-    horizontal offset in every bar, so a case can be followed across bars.
+    Bar-plot alternative to the radar, with one panel (and y axis) per
+    metric so raw values in their own units can be shown (e.g. HD95 in mm).
+    Solid bars show the median, error bars the IQR, and each case is drawn
+    on top as a translucent point coloured by manual lesion volume (same
+    colour scale as the radar). Its horizontal offset follows its volume rank
+    (smallest left, largest right), as on the radar, so a case keeps the same
+    position in every panel and similar volumes sit together.
+
+    higher_better : per metric, True / False adds ↑ / ↓ to the panel title
+    bounded       : per metric, True keeps a 0-1 axis (extended below 0 if
+                    needed); False scales the axis to the data from 0
     """
     values  = np.asarray(values, dtype=float)
+    n       = len(labels)
+    higher_better = higher_better or [None] * n
+    bounded       = bounded or [True] * n
     medians = np.nanmedian(values, axis=0)
     q1      = np.nanpercentile(values, 25, axis=0)
     q3      = np.nanpercentile(values, 75, axis=0)
-    x       = np.arange(len(measures))
 
     cmap = plt.get_cmap('cividis')
     if info.get('logplot', False):
@@ -397,37 +499,42 @@ def plot_metric_bars(values, colourmap, measures, info, outfile):
         norm = matplotlib.colors.Normalize(vmin=info['minimum'],
                                            vmax=info['maximum'])
 
-    fig, ax = plt.subplots(figsize=(12, 5), dpi=300, constrained_layout=True)
+    fig, axes = plt.subplots(1, n, figsize=(1.25 * n + 1.5, 4.5), dpi=300,
+                             constrained_layout=True, squeeze=False)
+    axes = axes[0]
+    rank   = (rankdata(colourmap) - 1) / max(len(colourmap) - 1, 1)   # 0 .. 1
+    jitter = (rank - 0.5) * 2 * 0.2                                  # ±0.2
 
-    ax.bar(x, medians, width=0.6, color=TEAL, zorder=1)
-    ax.errorbar(x, medians, yerr=[medians - q1, q3 - medians],
-                fmt='none', ecolor='#1b4d47', elinewidth=1.5, capsize=5,
-                zorder=3)
-
-    jitter = np.random.default_rng(0).uniform(-0.2, 0.2, values.shape[0])
-    for j in range(len(measures)):
+    for j, ax in enumerate(axes):
         y    = values[:, j]
         mask = np.isfinite(y)
-        ax.scatter(x[j] + jitter[mask], y[mask], c=colourmap[mask],
-                   cmap=cmap, norm=norm, s=12, alpha=0.4, edgecolors='none',
-                   zorder=2)
+        ax.bar(0, medians[j], width=0.6, color=TEAL, zorder=1)
+        ax.scatter(jitter[mask], y[mask], c=colourmap[mask], cmap=cmap,
+                   norm=norm, s=10, alpha=0.4, edgecolors='none', zorder=2)
+        ax.errorbar(0, medians[j], yerr=[[medians[j] - q1[j]], [q3[j] - medians[j]]],
+                    fmt='none', ecolor='black', elinewidth=1.5, capsize=5,
+                    zorder=3)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(measures, fontsize=12, rotation=30, ha='right')
-    ax.set_ylabel('Score', fontsize=12)
-    ax.set_ylim(min(0, np.nanmin(values)), 1.02)
-    ax.tick_params(labelsize=10)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.grid(True, axis='y', linestyle='--', linewidth=0.5, alpha=0.5)
+        arrow = {True: ' ↑', False: ' ↓'}.get(higher_better[j], '')
+        ax.set_title(labels[j] + arrow, fontsize=10)
+        ax.set_xlim(-0.5, 0.5)
+        ax.set_xticks([])
+        if bounded[j]:
+            ax.set_ylim(min(0, np.nanmin(y)) if mask.any() else 0, 1.02)
+        elif mask.any():
+            ax.set_ylim(0, np.nanmax(y) * 1.05 or 1)
+        ax.tick_params(labelsize=8)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.grid(True, axis='y', linestyle='--', linewidth=0.5, alpha=0.5)
 
     cb = fig.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap),
-                      ax=ax, shrink=0.8)
+                      ax=axes, shrink=0.8, pad=0.02)
     label = info.get('label','')
     if info.get('unit'):
         label += f" ({info['unit']})"
-    cb.set_label(label, fontsize=12)
-    cb.ax.tick_params(labelsize=10)
+    cb.set_label(label, fontsize=11)
+    cb.ax.tick_params(labelsize=9)
 
     fig.savefig(outfile, dpi=300)
     if info.get('display', False):

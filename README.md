@@ -7,27 +7,68 @@ performance across a cohort.
 
 ---
 
-## Scientific Overview
+## Example output
 
-Below is an example **radar plot** summarizing multiple similarity metrics (e.g., Dice, Jaccard,
-true positive rate) for each case in a cohort. Points are colored by the manual lesion volume on a
-logarithmic scale. The solid blue line indicates the median performance across cases,
-and the shaded blue band represents the interquartile range (IQR), highlighting variability.
+All plots below come from one EISRAD run on a stroke cohort (DWI lesion masks, manual vs.
+automated). Every plot is written per patient and per lesion (`*_lesion`); the most informative
+versions are shown here.
 
-![Radar Plot Example](radar.png)
+### Radar plots
 
-Next, a **volume agreement scatter plot** shows how manual and automated lesion volumes correlate.
-Each point represents one case; perfect agreement would lie on the diagonal line. The Pearson
-correlation coefficient quantifies overall agreement, while the inset confusion matrix reports the
-number of cases where both volumes are zero (no lesion) or nonzero.
+![Radar plot](docs/radar.webp)
 
-![Volume Scatter Example](vol_scatter.png)
+**Radar plot (per patient).** One spoke per metric, all scaled so 1 is best. Each dot is a
+patient, coloured by manual lesion volume and placed left or right of the spoke by volume (small
+clockwise, large counter-clockwise), so a patient sits at the same position on every spoke. The
+blue line is the median, the band the interquartile range; the table lists both.
 
-Finally, the **DICE vs. lesion volume scatter plot** illustrates how algorithm accuracy (Dice)
-depends on lesion size. The red dashed line marks the detection threshold (e.g., Dice = 0.2), and both
-Pearson and Spearman correlations are reported.
+![Lesion radar plot](docs/radar_lesion.webp)
 
-![DICE vs Volume Scatter Example](dice_scatter.png)
+**Radar plot (per lesion).** The same layout for individual lesions. Instead of thousands of
+dots, each spoke shows how the lesions are distributed: every segment is a 0.1-wide value range,
+coloured by the share of lesions in it (white = none).
+
+### Bar plots
+
+![Bar plot](docs/bars.webp)
+
+**Bar plot (per patient).** An alternative to the radar with one panel per metric, using raw
+values in their own units (e.g. HD95 in mm, OER/DER from 0 to 2). Arrows show whether higher (↑)
+or lower (↓) is better. Bars are medians, error bars the IQR, dots the patients, ordered by
+volume as on the radar.
+
+![Lesion bar plot](docs/bars_lesion.webp)
+
+**Bar plot (per lesion).** The same for individual lesions.
+
+### Volume and Dice
+
+![Volume heatmap](docs/vol_heatmap.webp)
+
+**Volume heatmap.** Manual vs. automated lesion volume on log axes; cell colour is the number of
+patients, and perfect agreement lies on the diagonal. The histograms show both volume
+distributions, and the table counts patients with and without lesions in each mask. The lesion
+version compares each manual lesion with its automated counterpart and counts detected, missed
+and false-positive lesions.
+
+![Dice heatmap](docs/dice_heatmap.webp)
+
+**Dice heatmap.** Dice against manual lesion volume, showing how overlap depends on lesion size.
+The dashed line marks the Dice threshold (default 0.2); the histogram shows the Dice
+distribution.
+
+### Detection
+
+![Detection curve](docs/detection.webp)
+
+**Detection curve (per patient).** The share of patients whose lesion is found, as a function of
+how much of it must be covered (coverage threshold). At 0 it is the share with any overlap at
+all. The band is a 95% confidence interval.
+
+![Lesion detection curve](docs/detection_lesion.webp)
+
+**Detection curve (per lesion).** The same for individual lesions: small lesions that are missed
+pull this curve below the patient curve.
 
 ---
 
@@ -47,6 +88,8 @@ differ are skipped (and counted in the terminal output).
 
 ## Metrics
 
+Volumes are reported in mL (1 mL = 1 cm³ = 1000 mm³).
+
 ### Per patient
 
 Each patient contributes one value per metric, computed over all voxels of the image. With
@@ -63,12 +106,26 @@ background voxels:
 | **ARI** | adjusted Rand index of the voxel labels | Agreement corrected for chance; can be negative. |
 | **ICC** | $\dfrac{MS_b - MS_w}{MS_b + MS_w}$ | One-way intraclass correlation ICC(1,1) for two raters over all voxels, with $m = (A+B)/2$, $MS_w = \frac{1}{n}\sum\big[(A-m)^2 + (B-m)^2\big]$, $MS_b = \frac{2}{n-1}\sum (m - \bar m)^2$; can be negative. |
 | **KAP** | $\dfrac{p_o - p_e}{1 - p_e}$ | Cohen's kappa: observed voxel agreement $p_o$ corrected for chance agreement $p_e$; 1 if both masks are empty; can be negative. |
-| **1-OER** | $1 - \dfrac{\sum_{\text{detected}}\big(\lvert A_i\rvert + \lvert B_j\rvert\big) - 2\,TP}{MTA}$ | Outline error rate (Wack et al., 2012): voxel mismatch within lesions found in both masks. Lesions are 26-connected components; a lesion is detected if it overlaps the other mask; $MTA = (\lvert A\rvert + \lvert B\rvert)/2$. |
-| **1-DER** | $1 - \dfrac{\sum_{\text{undetected}}\lvert A_i\rvert + \sum_{\text{undetected}}\lvert B_j\rvert}{MTA}$ | Detection error rate (Wack et al., 2012): volume of lesions present in only one mask (missed lesions and false-positive blobs). |
+| **1-OER/2** | $1 - \dfrac{\mathrm{OER}}{2}$, $\ \mathrm{OER} = \dfrac{\sum_{\text{detected}}\big(\lvert A_i\rvert + \lvert B_j\rvert\big) - 2\,TP}{MTA}$ | Outline error rate (Wack et al., 2012): voxel mismatch within lesions found in both masks. Lesions are 26-connected components; a lesion is detected if it overlaps the other mask; $MTA = (\lvert A\rvert + \lvert B\rvert)/2$. OER lies in $[0, 2]$, so it is halved to fit the 0–1 scale. |
+| **1-DER/2** | $1 - \dfrac{\mathrm{DER}}{2}$, $\ \mathrm{DER} = \dfrac{\sum_{\text{undetected}}\lvert A_i\rvert + \sum_{\text{undetected}}\lvert B_j\rvert}{MTA}$ | Detection error rate (Wack et al., 2012): volume of lesions present in only one mask (missed lesions and false-positive blobs). DER lies in $[0, 2]$ (2 = nothing overlaps). |
+| **1/(1+HD95/r) (L)** | $\dfrac{\sum_i V_i\,\big(1 + \mathrm{HD95}_i/r_i\big)^{-1}}{\sum_i V_i}$ | Lesion-averaged boundary distance score. $\mathrm{HD95}_i$ is the per-lesion HD95 in mm (see [Per lesion](#per-lesion)), $r_i$ the radius of a sphere with lesion $i$'s volume $V_i$, so each lesion's score is relative to its own size (0.5 = off by about one lesion radius). Averaged over the detected manual lesions, weighted by volume. Missed lesions are left out (they count in 1-DER/2 and the detection curves); 0 if no lesion was detected, 1 if neither mask has a lesion. The CSV also lists the volume-weighted mean HD95 in mm as `HD95_mm (L)`. |
+| **SDice (L)** | $\dfrac{\sum_i V_i\,\mathrm{SDice}_i}{\sum_i V_i}$ | Lesion-averaged surface Dice: the per-lesion surface Dice (see [Per lesion](#per-lesion)), averaged over the detected manual lesions, weighted by volume; missed lesions are left out. 0 if no lesion was detected, 1 if neither mask has a lesion. |
 
-ARI, ICC, KAP, 1-OER and 1-DER can be negative (OER and DER can exceed 1). The plots clamp
-negative values to 0 so all metrics share a 0–1 scale, and print a warning with the counts; the
-metrics CSV keeps the raw values.
+The two halved error rates split the Dice error into an outline part and a detection part:
+$\mathrm{OER}/2 + \mathrm{DER}/2 = 1 - \mathrm{Dice}$.
+
+**(L)** marks measures that are computed per manual lesion and then averaged per patient. They
+are not the same as the corresponding whole-mask measures reported by other tools.
+
+ARI, ICC and KAP can be negative (agreement worse than chance). The radar plot clamps negative
+values to 0 so all metrics share a 0–1 scale, and prints a warning with the counts; the metrics
+CSV and the bar plots keep the raw values.
+
+The **bar plot** (`--bar-plot`) shows each metric in its own panel with its own y axis, using the
+raw values rather than the radar's 0–1 scores: OER and DER (0–2) instead of 1-OER/2 and 1-DER/2, HD95 in mm
+instead of $1/(1+\mathrm{HD95}/r)$, and unclamped ARI, ICC and KAP. Arrows in the panel titles
+show whether higher (↑) or lower (↓) is better. Bars are medians, error bars the IQR, and dots the
+individual patients (or lesions); each dot keeps the same horizontal position in every panel.
 
 The **detection curve** (`--detection-curve`) treats each patient's manual mask as one lesion
 (e.g. one stroke, however many components it has): its coverage is the patient's TPR, the
@@ -98,6 +155,11 @@ $TP_i = |A_i \cap B|$, $FP_i = |B_i| - TP_i$, $FN_i = |A_i| - TP_i$, and
 | **Jaccard** | $\dfrac{TP_i}{TP_i + FP_i + FN_i}$ |
 | **TPR** | $\dfrac{TP_i}{\lvert A_i\rvert}$ (the lesion's coverage) |
 | **VS** | $1 - \dfrac{\lvert FN_i - FP_i\rvert}{2\,TP_i + FP_i + FN_i}$ |
+| **HD95** | 95th percentile of the surface-to-surface distances between $A_i$ and $B_i$ (both directions, in mm) |
+| **SDice** | share of the surface voxels of $A_i$ and $B_i$ within tolerance $\tau$ of the other surface (by default one voxel in every direction; `--surface-tolerance MM` for a fixed tolerance) |
+
+HD95 and SDice are only computed for detected lesions; for missed lesions they are left empty in
+the lesions CSV.
 
 The per-lesion **detection curve** (`*_lesion.png`) uses each lesion's coverage (TPR) instead of
 the patient's: it shows the percentage of all manual lesions with coverage $\geq t$ and $> 0$,
@@ -105,12 +167,19 @@ with a 95% confidence band from resampling patients, so lesions of the same pati
 together.
 
 MI, ARI, ICC and KAP are not computed per lesion: they depend on how much background is included,
-which has no natural definition for a single lesion. 1-OER would equal $2\,\mathrm{Dice} - 1$ per
+which has no natural definition for a single lesion. 1-OER/2 would equal Dice per
 lesion and is omitted. Lesions from the same patient are not independent, so per-lesion
 correlations should be read with that in mind.
 
-Every requested bar plot, heatmap and detection curve is written in both versions: per patient (e.g.
-`bars.png`) and per lesion (`bars_lesion.png`); there is no per-lesion radar. With `-r`, a
+The radar and every requested bar plot, heatmap and detection curve are written in both versions:
+per patient (e.g. `bars.png`) and per lesion (`bars_lesion.png`). Instead of one dot per lesion
+(thousands of dots would hide everything), the per-lesion radar shows a heatmap along each spoke:
+ring segments coloured by the share of lesions in each 0.1-wide value bin (one per ring) (classes 0–5, 5–10,
+10–15, 15–20, 20–30, 30–40, 40–60, 60–80 and 80–100%: fine steps where most segments are, wider
+towards 100; light to dark blue, with lightness alone separating the classes so it also works
+for colour-blind readers; bins without any lesion are white), with the median line and IQR band on top. A small
+hole in the middle keeps the spokes' 0-bins apart. HD95 and SDice are left
+out for missed lesions, as in the lesions CSV, so their percentages refer to detected lesions. With `-r`, a
 `*_lesions.csv` with one row per manual or false-positive lesion is written next to the metrics
 CSV.
 
@@ -160,7 +229,14 @@ eisrad -f pair_list.csv -o radar.png -r metrics.csv
 ```
 
 - **`-f, --file`**: CSV file with `manual,auto` columns pointing to NIfTI mask paths.  
-- **`-o, --output`**: Output radar plot image (default `polar_results.png`).  
+- **`-o, --output`**: Output radar plot image (default `polar_results.png`).
+
+All plot files take their format from the file extension: `.png`, `.webp`, `.jpg`, `.pdf` or `.svg`.
+`--format FMT` sets one format for all plots at once by replacing each plot file's extension
+(e.g. `-o radar.png --format webp` writes `radar.webp`).
+For smaller files use `.webp`, typically 3–5× smaller than PNG without visible loss at the
+300 dpi EISRAD uses. `.jpg` saves less and blurs sharp text and lines more. `.pdf` and `.svg` are
+vector formats for publications.  
 - **`-r, --results`**: Output CSV for numeric metrics (plus `*_lesions.csv` with per-lesion metrics).
 
 Run `eisrad -h` for the full list of flags.
@@ -169,15 +245,17 @@ Run `eisrad -h` for the full list of flags.
 
 - `-b, --binarize [T]`: Binarize all masks at `> T → 1`; `-b` alone uses `T = 0` (default: only non-binary masks are binarized, at 0.5).  
 - `-l, --log`: Log color scale for the radar and bar plots (points are colored by manual lesion volume).  
-- `-L, --label` / `-u, --unit`: Colorbar label and unit (default `Manual lesion volume`, `cc`).  
-- `-j, --jobs N`: Process `N` file pairs in parallel (default: available CPUs − 1; `-j 1` processes one pair at a time). With masks on a slow network or backup drive, a moderate `N` (e.g. 4–8) can be faster than the default.  
+- `-L, --label` / `-u, --unit`: Colorbar label and unit (default `Manual lesion volume`, `mL`).  
+- `--surface-tolerance MM`: Surface Dice tolerance in mm (default: one voxel in every direction).  
+- `--format FMT`: Image format for all plots (`png`, `webp`, `jpg`, `pdf`, `svg`); replaces each plot file's extension.  
+- `-j, --jobs N`: Process `N` file pairs in parallel (default `1`). Speeds up large cohorts; `eisrad -h` shows how many CPUs are available. With masks on a slow network or backup drive, a moderate `N` (e.g. 4–8) usually works best.  
 - `--dice-threshold FLOAT`: Low-Dice cutoff (default `0.2`).  
 - `--low-dice-csv PATH`: Save cases with Dice < threshold.  
 - `--vol-diff-threshold FLOAT`: Relative volume-diff cutoff.  
 - `--high-vol-diff-csv PATH`: Save cases exceeding vol-diff.  
 - `--volume-heatmap PATH`: Save manual vs auto volume heatmap with marginal volume histograms (`--scatter-volume` still works as an alias).  
 - `--dice-heatmap PATH`: Save Dice vs volume heatmap with marginal Dice histogram (`--scatter-dice` still works as an alias).
-- `--bar-plot PATH`: Save metric bar plot (median + IQR, cases as points), an alternative to the radar.
+- `--bar-plot PATH`: Save metric bar plot (raw values, one panel per metric; median + IQR, cases as points), an alternative to the radar.
 - `--detection-curve PATH`: Save the detection rate vs. coverage threshold curve (per patient, plus `*_lesion` per lesion).
 
 ---
@@ -229,7 +307,9 @@ eisrad/
 ├─ io.py
 ├─ metrics.py
 ├─ reports.py
-└─ plots.py
+├─ plots.py
+└─ test_metrics.py
+docs/              example figures used in this README
 README.md
 pyproject.toml
 ```
