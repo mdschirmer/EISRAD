@@ -31,6 +31,28 @@ def _corr(func, x, y):
 def _intermediate_ticks(min_val, max_val, n=4):
     return list(np.linspace(min_val, max_val, num=n+2)[1:-1])
 
+def setup_radar_axes(ax, measures):
+    """
+    Polar axes for a radar plot: 0-1 radius, one labelled spoke per measure
+    (labels aligned away from the circle), ring numbers between the first
+    two spokes. Returns the spoke angles.
+    """
+    N = len(measures)
+    angles = [n/float(N)*2*pi for n in range(N)]
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0,0.2,0.4,0.6,0.8,1.0])
+    ax.set_xticks(angles)
+    ax.set_xticklabels(measures, fontsize=12)
+    # Align labels away from the circle so long names do not overlap it
+    for lab, ang in zip(ax.get_xticklabels(), angles):
+        c = np.cos(ang)
+        lab.set_horizontalalignment('left' if c > 0.1 else
+                                    'right' if c < -0.1 else 'center')
+    ax.tick_params(axis='x', pad=2)
+    # Ring numbers halfway between the first two spokes (Dice and Jaccard)
+    ax.set_rlabel_position(180.0 / N)
+    return angles
+
 def plot_radar(values, colourmap, measures, info, outfile='polar_results.png',
                show_points=True, density=False, density_bin=0.1,
                density_label='% of cases'):
@@ -65,18 +87,7 @@ def plot_radar(values, colourmap, measures, info, outfile='polar_results.png',
 
     # ── Radar subplot (left 2/3) ──
     ax = fig.add_subplot(gs[0, 0], polar=True)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([0,0.2,0.4,0.6,0.8,1.0])
-    ax.set_xticks(angles)
-    ax.set_xticklabels(measures, fontsize=12)
-    # Align labels away from the circle so long names do not overlap it
-    for lab, ang in zip(ax.get_xticklabels(), angles):
-        c = np.cos(ang)
-        lab.set_horizontalalignment('left' if c > 0.1 else
-                                    'right' if c < -0.1 else 'center')
-    ax.tick_params(axis='x', pad=2)
-    # Ring numbers halfway between the first two spokes (Dice and Jaccard)
-    ax.set_rlabel_position(180.0 / N)
+    setup_radar_axes(ax, measures)
     if density:
         # Small hole in the centre so the spokes' 0-bins do not overlap
         hole = 0.15
@@ -541,6 +552,30 @@ def plot_metric_bars(values, colourmap, labels, info, outfile,
         plt.show()
     plt.close(fig)
 
+def detection_curve(coverages, n_boot=1000, seed=0):
+    """
+    Detection rate (%) vs. coverage threshold, pooled over items, with a 95%
+    bootstrap CI from resampling patients (lesions of a patient stay
+    together). An item counts as detected at t if coverage >= t and > 0.
+
+    coverages : list of non-empty 1-D arrays, one per patient
+    Returns thresholds, pooled, ci_low, ci_high (each 101 values).
+    """
+    thresholds = np.linspace(0, 1, 101)
+    # detected[p, t]: items of patient p with coverage >= thresholds[t]
+    detected = np.array([((c[:, None] >= thresholds) & (c[:, None] > 0)).sum(axis=0)
+                         for c in coverages])
+    n_items  = np.array([len(c) for c in coverages])
+    pooled   = detected.sum(axis=0) / n_items.sum() * 100.0
+
+    # Patient-level bootstrap: multinomial counts = how often each is drawn
+    rng = np.random.default_rng(seed)
+    P   = len(coverages)
+    W   = rng.multinomial(P, np.full(P, 1.0/P), size=n_boot)
+    boot = (W @ detected) / (W @ n_items)[:, None] * 100.0
+    lo, hi = np.percentile(boot, [2.5, 97.5], axis=0)
+    return thresholds, pooled, lo, hi
+
 def plot_detection_curve(coverages, outfile, n_boot=1000, seed=0,
                          unit='lesions'):
     """
@@ -560,19 +595,8 @@ def plot_detection_curve(coverages, outfile, n_boot=1000, seed=0,
         print("⚠️  No lesions in manual masks → skipping detection curve.")
         return
 
-    thresholds = np.linspace(0, 1, 101)
-    # detected[p, t]: lesions of case p with coverage >= thresholds[t]
-    detected = np.array([((c[:, None] >= thresholds) & (c[:, None] > 0)).sum(axis=0)
-                         for c in coverages])
-    n_les    = np.array([len(c) for c in coverages])
-    pooled   = detected.sum(axis=0) / n_les.sum() * 100.0
-
-    # Case-level bootstrap: multinomial counts = how often each case is drawn
-    rng = np.random.default_rng(seed)
-    P   = len(coverages)
-    W   = rng.multinomial(P, np.full(P, 1.0/P), size=n_boot)
-    boot = (W @ detected) / (W @ n_les)[:, None] * 100.0
-    lo, hi = np.percentile(boot, [2.5, 97.5], axis=0)
+    thresholds, pooled, lo, hi = detection_curve(coverages, n_boot, seed)
+    P = len(coverages)
 
     all_cov  = np.concatenate(coverages)
     any_hit  = (all_cov > 0).mean() * 100.0

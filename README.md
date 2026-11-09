@@ -299,6 +299,78 @@ This generates:
 
 ---
 
+## Comparing algorithms
+
+`eisrad-compare` compares several algorithms using the outputs of separate EISRAD runs (one run
+per algorithm, all against the same manual masks):
+
+```bash
+eisrad -f salsa_pairs.csv  -o salsa/radar.png  -r salsa/metrics.csv
+eisrad -f nnunet_pairs.csv -o nnunet/radar.png -r nnunet/metrics.csv
+
+eisrad-compare -i SALSA=salsa/metrics.csv -i nnUNet=nnunet/metrics.csv \
+               -o comparison/ --format pdf
+```
+
+Each `-i NAME=PATH` names an algorithm and its metrics CSV; the `*_lesions.csv` next to it is
+picked up automatically. Without installing, run `PYTHONPATH=. python -m eisrad.compare ...`.
+
+**Matching.** Patients are matched by their manual mask, so every comparison is paired. EISRAD
+tries the full manual mask path, then its file name, then a BIDS subject ID (`sub-…`) in the
+path, and uses whichever identifies the most patients uniquely in every run (it prints which one).
+If none works, give a regular expression for the patient ID with `--id-pattern`, e.g.
+`--id-pattern 'sub-[0-9]+'` (the first group is used if the pattern has one). Patients missing
+from any run are reported and left out. Lesions are matched by patient and lesion number, which
+depend only on the manual mask. False-positive lesions are compared as a
+count per patient.
+
+**Statistics.** All tests are paired and two-sided.
+
+| Level | All algorithms (3 or more) | Pairs of algorithms |
+|---|---|---|
+| Patient metrics | Friedman test | Wilcoxon signed-rank test; median difference with 95% bootstrap CI |
+| Lesion metrics | — | Permutation test with signs flipped per patient (lesions of one patient are not independent); patient-bootstrap CI |
+| Patients detected (any overlap) | Cochran's Q test | Exact McNemar test |
+| Lesions detected (any overlap) | — | Permutation test with signs flipped per patient |
+
+The tests are chosen automatically from the number of algorithms given. With **two**, only the
+paired tests in the right column are run: they are the appropriate tests for two paired groups,
+and an omnibus test would add nothing (no `comparison_omnibus.csv` is written). With **three or
+more**, the omnibus tests in the middle column are run first, then all pairs.
+
+p-values are Holm-corrected: the omnibus tests across all metrics, the pairwise tests across all
+pairs and metrics, separately for patient and lesion level. Each test uses the patients (or
+lesions) that have a value for all algorithms involved, e.g. HD95 only for detected lesions.
+
+**Outputs** (in the output folder):
+
+- `comparison_pairwise.csv`: one row per pair of algorithms and metric, with
+  - `median A/B`, `mean A/B` (or `% detected A/B`) on the paired data;
+  - `effect` and `diff (A-B)` with a 95% bootstrap CI: the **median of differences** for patient
+    metrics (the estimate that goes with the Wilcoxon test), the **mean difference** for lesion
+    metrics and false-positive counts (what the permutation test tests; with many identical
+    values the median of differences is often 0 even when the algorithms clearly differ), and the
+    **difference in % detected** for detection;
+  - raw and Holm-corrected p-values;
+  - `better`: the algorithm favoured by `diff (A-B)`; only if that difference is exactly 0 is the
+    better mean (or detection rate) used. It shows the direction whether or not the difference is
+    significant, so read it together with `p (Holm)`.
+- `comparison_omnibus.csv` (three or more algorithms only): medians per algorithm and the
+  omnibus test per metric.
+- `compare_radar`, `compare_radar_lesion`: median line and IQR band of every algorithm on one
+  radar.
+- `compare_boxes`, `compare_boxes_lesion`: one panel per metric with its own axis (raw values),
+  one box per algorithm, individual patients or lesions as dots, and brackets with stars
+  (* p < 0.05, ** p < 0.01, *** p < 0.001, Holm-corrected) for significant pairs.
+- `compare_detection`, `compare_detection_lesion`: detection curves of all algorithms with 95%
+  confidence bands.
+
+Algorithms are coloured with the colour-blind-safe Okabe–Ito palette. Options: `--format`
+(png, pdf, svg, …), `--n-boot` (bootstrap resamples, default 2000), `--n-perm` (permutations,
+default 5000; the smallest possible lesion-level p-value is 1/(n-perm+1)), `--seed`.
+
+---
+
 ## Project Structure
 
 ```
@@ -308,6 +380,8 @@ eisrad/
 ├─ metrics.py
 ├─ reports.py
 ├─ plots.py
+├─ compare.py         comparison of algorithms (eisrad-compare)
+├─ compare_plots.py
 └─ test_metrics.py
 docs/              example figures used in this README
 README.md

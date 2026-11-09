@@ -31,6 +31,7 @@ Homepage = "https://github.com/mdschirmer/EISRAD"
 
 [project.scripts]
 eisrad = "eisrad.__main__:main"
+eisrad-compare = "eisrad.compare:main"
 
 [tool.setuptools]
 packages = ["eisrad"]
